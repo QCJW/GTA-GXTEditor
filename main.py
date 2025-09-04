@@ -1339,6 +1339,23 @@ class GXTEditorApp(QMainWindow):
             count = current_index - 1
         self.update_status(f"搜索结果: {count} 个匹配项")
 
+    def validate_table_name(self, name):
+        """验证表名是否符合当前版本的规则"""
+        if self.version == 'VC' or self.version == 'SA':
+            return re.match(r'^[0-9A-Z_]{1,7}$', name) is not None
+        elif self.version == 'IV':
+            return re.match(r'^[0-9a-zA-Z_]{1,7}$', name) is not None
+        # 对于III代或无特定规则的版本，默认允许
+        return True
+
+    def get_table_validation_error_message(self):
+        """获取当前版本表名的验证错误信息"""
+        if self.version == 'VC' or self.version == 'SA':
+            return "VC/SA 表名必须是1-7位大写字母、数字或下划线"
+        elif self.version == 'IV':
+            return "IV 表名必须是1-7位字母、数字或下划线"
+        return "表名格式不正确"
+
     def add_table(self):
         if self.file_type == 'dat':
             QMessageBox.information(self, "提示", "whm_table.dat 文件不支持多表操作。")
@@ -1350,6 +1367,11 @@ class GXTEditorApp(QMainWindow):
         name, ok = QInputDialog.getText(self, "新建表", "请输入表名：")
         if ok and name.strip():
             name = name.strip()
+            # [新增] 表名格式验证
+            if not self.validate_table_name(name):
+                QMessageBox.warning(self, "错误", f"表名 '{name}' 格式不正确！\n{self.get_table_validation_error_message()}")
+                return
+            
             if name in self.data:
                 QMessageBox.warning(self, "错误", f"表 '{name}' 已存在！")
                 return
@@ -1387,6 +1409,11 @@ class GXTEditorApp(QMainWindow):
         new, ok = QInputDialog.getText(self, "重命名表", "请输入新名称：", text=old)
         if ok and new.strip():
             new = new.strip()
+            # [新增] 表名格式验证
+            if not self.validate_table_name(new):
+                QMessageBox.warning(self, "错误", f"表名 '{new}' 格式不正确！\n{self.get_table_validation_error_message()}")
+                return
+                
             if new in self.data and new != old:
                 QMessageBox.warning(self, "错误", f"表 '{new}' 已存在！")
                 return
