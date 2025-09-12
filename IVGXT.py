@@ -33,16 +33,6 @@ def gta4_gxt_hash(key: str) -> int:
     ret_hash = (32769 * a_x) & 0xFFFFFFFF
     return ret_hash
 
-# ---------- 键名验证函数 ----------
-def is_valid_key(key: str) -> bool:
-    """验证键名格式是否有效"""
-    # 如果键名以 '0x' (不区分大小写) 开头，则必须是有效的8位十六进制哈希
-    if key.lower().startswith('0x'):
-        return re.match(r'^0[xX][0-9a-fA-F]{8}$', key) is not None
-    # 否则，它必须是标准的明文键名 (字母、数字、下划线)
-    else:
-        return re.match(r'^[A-Za-z0-9_]+$', key) is not None
-
 # ---------- 帮助函数 ----------
 
 def name_to_8_bytes(name: str) -> bytes:
@@ -50,42 +40,42 @@ def name_to_8_bytes(name: str) -> bytes:
     return b + b'\x00' * (8 - len(b))
 
 def u8_to_u16_list(u8_string: str):
-    """模拟 C++ 中 U8ToWide:
-       - utf8 -> utf16le code units (list of uint16)
-       - append trailing 0
-       - 然后调用 LiteralToGame（在写入前做）
+    """
+    模拟 C++ 中的 U8ToWide:
+    - utf8 -> utf16le 编码单元 (uint16列表)
+    - 追加结尾的0
+    - 然后调用 LiteralToGame（在写入前做）
     """
     if not u8_string:
         return [0]
-    # decode to python str then encode utf-16-le to get code units
+    # 解码为python字符串，然后编码为utf-16-le以获取编码单元
     utf16le = u8_string.encode('utf-16-le')
     u16 = list(struct.unpack('<' + 'H' * (len(utf16le) // 2), utf16le))
-    # ensure terminating 0
+    # 确保有结尾的0
     if not u16 or u16[-1] != 0:
         u16.append(0)
     return u16
 
 def literal_to_game_u16(u16_list):
-    """C++ LiteralToGame: 把 '™' (U+2122) 替为 0x0099（游戏内部）"""
+    """C++ LiteralToGame: 把 '™' (U+2122) 替换为 0x0099（游戏内部编码）"""
     for i, v in enumerate(u16_list):
         if v == 0x2122:
             u16_list[i] = 0x0099
 
 # 方便打印警告（C++ 也会输出警告，但不会中止）
 def warn(msg):
-    print("WARN:", msg)
+    print("警告:", msg)
 
-def load_txt(filepath: Path, special_chars=None):
-    
-
+def load_txt(filepath: Path, special_chars=None, validate_callback=None):
     if special_chars is None:
         special_chars = set()
 
     m_Data = {}
+    invalid_keys = []  # 用于存储无效的键
     current_table = None
 
     raw = filepath.read_bytes()
-    # strip BOM if present (C++ SkipUTF8Signature does this)
+    # 如果存在BOM则去除 (C++ SkipUTF8Signature 的功能)
     if raw.startswith(b'\xEF\xBB\xBF'):
         raw = raw[3:]
     text = raw.decode('utf-8', errors='replace')
@@ -108,10 +98,10 @@ def load_txt(filepath: Path, special_chars=None):
                 m_Data[current_table] = []
             continue
 
-        # accept both 0x...=text and plain keys
+        # 接受 0x...=text 和 普通键名=text 两种格式
         is_original = False
         if line.startswith(';'):
-            # original/comment — C++ would set is_original true; we support it
+            # 原始文本/注释 — C++ 会设置 is_original 为 true; 我们也支持它
             is_original = True
             line = line[1:]
 
@@ -120,134 +110,137 @@ def load_txt(filepath: Path, special_chars=None):
             key_left = m_entry.group(1).strip()
             b_string = m_entry.group(2)
             
-            # 验证键名格式
-            if not is_valid_key(key_left):
-                warn(f"{filepath}: line {line_no} has invalid key format: '{key_left}'. Skipping.")
-                continue
+            # 使用回调函数验证键名格式
+            if validate_callback:
+                is_valid, msg = validate_callback(key_left, 'IV')
+                if not is_valid:
+                    invalid_keys.append((key_left, line_no, msg))
+                    continue # 跳过此无效键
 
             if current_table is None:
-                warn(f"{filepath}: line {line_no} has entry without table; assigning to MAIN")
+                warn(f"{filepath}: 第 {line_no} 行条目没有所属表; 将分配到 'MAIN' 表")
                 current_table = 'MAIN'
                 if current_table not in m_Data:
                     m_Data[current_table] = []
 
-            # compute hash_string: if left looks like 0xHEX use it, else compute hash
+            # 计算 hash_string: 只允许明确以 0x 开头的十六进制键直接使用数字，其他都计算哈希
             hash_str = key_left
-            # try to detect hex literal
             try:
                 if key_left.lower().startswith('0x'):
-                    int(key_left, 16)  # validate
-                    # keep as-is
+                    int(key_left, 16)  # 验证格式
+                    # 保持原样（十六进制数字键）
                 else:
-                    # try decimal number
-                    int(key_left)
-                # if parsing succeeded, keep original key_left
+                    # 所有其他键（包括带下划线的"数字"键）都计算哈希
+                    raise ValueError("非十六进制键")
             except Exception:
-                # treat as plain key -> compute hash
+                # 作为普通键名 -> 计算哈希
                 h = gta4_gxt_hash(key_left)
                 hash_str = f'0x{h:08X}'
 
-            # ensure list exists
+            # 确保列表存在
             if current_table not in m_Data:
                 m_Data[current_table] = []
 
-            # C++ logic: if table empty or last.hash_string != hash_string -> emplace_back new TextEntry
+            # C++ 逻辑: 如果表为空或最后一个条目的 hash_string 不等于当前 hash_string -> 新建一个 TextEntry
             if not m_Data[current_table] or m_Data[current_table][-1]['hash_string'] != hash_str:
                 m_Data[current_table].append({'hash_string': hash_str, 'original': '', 'translated': ''})
+            
             p_entry = m_Data[current_table][-1]
             if is_original:
                 p_entry['original'] = b_string
             else:
                 p_entry['translated'] = b_string
-                # check ~ token parity like C++ did (optional warning)
-                if (b_string.count('~') & 1) == 1:
-                    warn(f"{filepath}: line {line_no} has odd number of '~'.")
+                # 检查 ~ 符号的奇偶性，类似C++ (可选的警告)
+                if (b_string.count('~') % 2) == 1:
+                    warn(f"{filepath}: 第 {line_no} 行有奇数个 '~' 符号。")
         else:
-            warn(f"{filepath}: line {line_no} cannot be recognized.")
-    # ensure MAIN exists
+            warn(f"{filepath}: 第 {line_no} 行无法识别。")
+            
+    # 确保MAIN表存在
     if 'MAIN' not in m_Data:
         m_Data['MAIN'] = []
-    return m_Data, special_chars
+        
+    return m_Data, invalid_keys, special_chars
 
 # ---------- 写 GXT（严格仿 C++ GenerateBinary） ----------
 def generate_binary(m_Data, output_path: Path):
-    # Ensure table ordering: MAIN first, then other names sorted lexicographically
+    # 确保表的顺序: MAIN 表在最前面, 其他表按字母顺序排序
     table_names = ['MAIN'] + sorted([name for name in m_Data.keys() if name != 'MAIN'])
 
     with open(output_path, 'wb') as f:
-        # GXTHeader: Version(uint16)=4, CharBits(uint16)=16
+        # GXTHeader: 版本号(uint16)=4, 字符位数(uint16)=16
         f.write(struct.pack('<H', 4))
         f.write(struct.pack('<H', 16))
 
-        # TableBlock: 'TABL' + Size (int32) where Size = table_count * sizeof(TableEntry) (12)
+        # TableBlock: 'TABL' + 大小 (int32), 大小 = 表数量 * TableEntry大小(12)
         table_count = len(table_names)
         f.write(b'TABL')
         f.write(struct.pack('<I', table_count * 12))
 
-        # Reserve table entries
+        # 预留表条目的空间
         table_entries_pos = f.tell()
         f.write(b'\x00' * (table_count * 12))
 
-        # write each table block, record TableEntry (Name, Offset)
-        table_entries = []  # list of tuples (name_bytes8, offset_int)
+        # 写入每个表的数据块, 并记录 TableEntry (表名, 偏移量)
+        table_entries = []  # (表名_8字节, 偏移量_整数) 的元组列表
         for table_name in table_names:
-            # record offset
+            # 记录偏移量
             table_offset = f.tell()
             table_entries.append((table_name, table_offset))
 
             entries = m_Data.get(table_name, [])
 
-            # Prepare KeyBlock and data arrays in memory first like C++ does
+            # 像C++一样, 先在内存中准备好 KeyBlock 和数据数组
             key_entries = []
-            datas = []  # list of uint16 values
+            datas = []  # uint16 值的列表
 
             for entry in entries:
                 hash_str = entry.get('hash_string', '') or entry.get('original', '')
                 try:
-                    # allow '0x...' or decimal fallback
+                    # 允许 '0x...' 或回退到十进制
                     if isinstance(hash_str, str) and hash_str.lower().startswith('0x'):
                         h_val = int(hash_str, 16)
                     else:
                         h_val = int(hash_str)
                 except Exception:
                     h_val = 0
-                    warn(f"Invalid hash string for table {table_name}: '{hash_str}'")
+                    warn(f"表 {table_name} 中存在无效的哈希字符串: '{hash_str}'")
 
-                # compute offset (bytes) from start of data area = current datas length * 2
+                # 计算偏移量(字节), 从数据区开始 = 当前数据长度 * 2
                 offset_bytes = len(datas) * 2
                 key_entries.append((offset_bytes, h_val))
 
-                # convert translated to u16 list with terminating 0 (U8ToWide)
+                # 将翻译文本转换为带结尾0的u16列表 (U8ToWide)
                 w_u16 = u8_to_u16_list(entry.get('translated', ''))
-                # apply LiteralToGame mapping (C++ LiteralToGame)
+                # 应用 LiteralToGame 映射 (C++ LiteralToGame)
                 literal_to_game_u16(w_u16)
-                # append into datas (including terminating 0)
+                # 追加到 datas (包括结尾的0)
                 datas.extend(w_u16)
 
-            # Now write KeyBlock: for MAIN, write only TKEY + size; others write Name[8] + TKEY + size
+            # 现在写入 KeyBlock: 对于 MAIN 表, 只写 TKEY + 大小; 其他表则写 表名[8] + TKEY + 大小
             if table_name == 'MAIN':
                 f.write(b'TKEY')
             else:
                 f.write(name_to_8_bytes(table_name))
                 f.write(b'TKEY')
-            # Size of KeyEntry region (bytes) = number of keys * sizeof(KeyEntry)
-            key_block_size = len(key_entries) * struct.calcsize('<iI')  # Offset(int32) + Hash(uint32)
+            # KeyEntry 区域的大小(字节) = 键数量 * KeyEntry大小
+            key_block_size = len(key_entries) * struct.calcsize('<iI')  # 偏移量(int32) + 哈希(uint32)
             f.write(struct.pack('<I', key_block_size))
 
-            # write KeyEntry array
+            # 写入 KeyEntry 数组
             for off_b, hash_v in key_entries:
                 f.write(struct.pack('<iI', off_b, hash_v))
 
-            # write DataBlock header 'TDAT' + Size(bytes)
+            # 写入 DataBlock 头部 'TDAT' + 大小(字节)
             data_block_size = len(datas) * 2
             f.write(b'TDAT')
             f.write(struct.pack('<I', data_block_size))
 
-            # write datas as uint16 little-endian
+            # 将 datas 作为 uint16 小端序写入
             if datas:
                 f.write(struct.pack('<' + 'H' * len(datas), *datas))
 
-        # After writing all tables, backfill TableEntry array at table_entries_pos
+        # 写完所有表后, 回到 table_entries_pos 位置填充 TableEntry 数组
         f.seek(table_entries_pos, 0)
         for name, offset in table_entries:
             f.write(name_to_8_bytes(name))
@@ -258,7 +251,7 @@ def generate_binary(m_Data, output_path: Path):
 # ---------- 特殊字符收集功能 ----------
 def process_special_chars(special_chars):
     # 移除不需要的特殊字符
-    special_chars.discard(chr(0x2122))  # trademark
+    special_chars.discard(chr(0x2122))  # 商标符号
     special_chars.discard(chr(0x3000))  # 全角空格
     special_chars.discard(chr(0xFEFF))  # BOM标记
 
@@ -296,7 +289,7 @@ def main():
         print(f"输入文件 {input_file} 在当前目录中未找到。")
         return
 
-    m_Data, special_chars = load_txt(input_file)
+    m_Data, _, special_chars = load_txt(input_file)
     generate_binary(m_Data, OUTPUT_GXT)
     process_special_chars(special_chars)
 

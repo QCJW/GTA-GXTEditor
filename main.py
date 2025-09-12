@@ -2,6 +2,7 @@ import os
 import shutil
 import sys
 import re
+import json
 from pathlib import Path
 from PySide6.QtGui import QIcon
 from collections import OrderedDict
@@ -357,7 +358,7 @@ class FontSelectionWidget(QWidget):
         style = []
         if self.font.bold(): style.append("Bold")
         if self.font.italic(): style.append("Italic")
-        style_str = ", ".join(style) if style else "Regular"
+        style_str = ", ".join(style) if style else "常规"
         self.font_display_label.setText(f"{self.font.family()}, {self.font.pointSize()}pt, {style_str}")
 
     def get_font(self):
@@ -395,14 +396,14 @@ class FontGeneratorDialog(QDialog):
     def __init__(self, parent=None, initial_chars="", initial_version="IV"):
         super().__init__(parent)
         self.setWindowTitle("GTA 字体贴图生成器")
-        self.setMinimumSize(640, 700)  # 减小高度
+        self.setMinimumSize(640, 700)
         self.gxt_editor = parent
         self.generator = FontTextureGenerator()
-        self.characters = initial_chars  # 存储字符数据
+        self.characters = initial_chars
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)  # 减小边距
-        layout.setSpacing(8)  # 减小间距
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
         
         # --- 基本设置组 ---
         settings_group = QGroupBox("基本设置")
@@ -432,7 +433,7 @@ class FontGeneratorDialog(QDialog):
         res_layout.addWidget(self.res_combo)
         top_row.addLayout(res_layout)
         
-        top_row.addStretch()  # 添加弹性空间
+        top_row.addStretch()
         settings_layout.addLayout(top_row)
         
         # 字体选择
@@ -465,7 +466,7 @@ class FontGeneratorDialog(QDialog):
         char_btn_layout.addWidget(self.btn_load_from_gxt)
         char_btn_layout.addWidget(self.btn_import_chars)
         char_btn_layout.addWidget(self.btn_input_chars)
-        char_btn_layout.addStretch()  # 添加弹性空间
+        char_btn_layout.addStretch()
         
         chars_layout.addLayout(char_btn_layout)
         
@@ -473,7 +474,7 @@ class FontGeneratorDialog(QDialog):
         self.char_info_layout = QHBoxLayout()
         self.char_count_label = QLabel("字符数: 0")
         self.char_info_layout.addWidget(self.char_count_label)
-        self.char_info_layout.addStretch()  # 添加弹性空间
+        self.char_info_layout.addStretch()
         self.btn_show_chars = QPushButton("查看字符列表")
         self.btn_show_chars.clicked.connect(self.show_chars_list)
         self.char_info_layout.addWidget(self.btn_show_chars)
@@ -481,7 +482,6 @@ class FontGeneratorDialog(QDialog):
         
         layout.addWidget(chars_group)
         
-        # 更新字符数显示
         self.update_char_count()
 
         # --- 预览组 ---
@@ -678,12 +678,12 @@ class EditKeyDialog(QDialog):
         self.original_key = key
         
         # --- 模式标志 ---
-        self.is_batch_add_mode = is_batch_add   # 批量添加新条目
-        self.is_batch_edit_mode = is_batch_edit # 批量编辑现有条目
-        self.is_single_mode = not (is_batch_add or is_batch_edit) # 单个添加或编辑
+        self.is_batch_add_mode = is_batch_add
+        self.is_batch_edit_mode = is_batch_edit
+        self.is_single_mode = not (is_batch_add or is_batch_edit)
 
         self.original_batch_keys = batch_edit_data['keys'] if self.is_batch_edit_mode and batch_edit_data else []
-        self.key_value_pairs = [] # 用于存储结果
+        self.key_value_pairs = []
 
         layout = QVBoxLayout(self)
 
@@ -711,7 +711,7 @@ class EditKeyDialog(QDialog):
         
         if self.is_batch_edit_mode:
             self.batch_edit.setPlaceholderText("每行一个键值对，格式为：键=值\n请确保行数与选择的条目数一致")
-        else: # 批量添加模式
+        else:
             self.batch_edit.setPlaceholderText("每行输入一个键值对，格式为：键=值\n空行将被忽略")
         layout.addWidget(self.batch_edit)
         
@@ -742,24 +742,21 @@ class EditKeyDialog(QDialog):
 
     def _update_ui_for_mode(self):
         """根据当前模式更新UI可见性"""
-        # 批量编辑模式下，不允许切换，直接显示批量框并隐藏切换器
         if self.is_batch_edit_mode:
             self.single_mode_widget.hide()
             self.batch_edit.show()
             self.add_mode_widget.hide()
             return
 
-        # “添加”操作（包括单个和批量添加）
         is_add_operation = (self.original_key == "")
         if is_add_operation:
-            self.add_mode_widget.show()  # 在添加模式下，始终显示切换按钮
+            self.add_mode_widget.show()
             if self.is_batch_add_mode:
                 self.single_mode_widget.hide()
                 self.batch_edit.show()
-            else:  # 单个添加模式
+            else:
                 self.single_mode_widget.show()
                 self.batch_edit.hide()
-        # “单个编辑”操作
         else:
             self.add_mode_widget.hide()
             self.single_mode_widget.show()
@@ -779,25 +776,21 @@ class EditKeyDialog(QDialog):
         self._update_ui_for_mode()
 
     def validate_key(self, key):
-        """验证键名是否符合当前版本的规则"""
+        """验证键名是否符合当前版本的规则 (使用 re.fullmatch)"""
         if self.file_type == 'dat':
-            # 修复：使 '0x' 前缀检查不区分大小写
-            return re.match(r'^0[xX][0-9a-fA-F]{8}$', key) is not None
+            return re.fullmatch(r'0[xX][0-9a-fA-F]{8}', key) is not None
         
         if self.version == 'VC':
-            return re.match(r'^[0-9A-Z_]{1,7}$', key) is not None
+            return re.fullmatch(r'[0-9A-Z_]{1,7}', key) is not None
         elif self.version == 'SA':
-            return re.match(r'^[0-9a-fA-F]{1,8}$', key) is not None
+            return re.fullmatch(r'[0-9a-fA-F]{1,8}', key) is not None
         elif self.version == 'III':
-            return re.match(r'^[0-9a-zA-Z_]{1,7}$', key) is not None
+            return re.fullmatch(r'[0-9a-zA-Z_]{1,7}', key) is not None
         elif self.version == 'IV':
-            # 修复：为IV版本实现更严格的键名验证逻辑
-            # 如果键名以 '0x' (不区分大小写) 开头，则必须是有效的8位十六进制哈希
             if key.lower().startswith('0x'):
-                return re.match(r'^0[xX][0-9a-fA-F]{8}$', key) is not None
-            # 否则，它必须是标准的明文键名 (字母、数字、下划线)
+                return re.fullmatch(r'0[xX][0-9a-fA-F]{8}', key) is not None
             else:
-                return re.match(r'^[A-Za-z0-9_]+$', key) is not None
+                return re.fullmatch(r'[A-Za-z0-9_]+', key) is not None
         return True
 
     def get_validation_error_message(self):
@@ -868,9 +861,9 @@ class EditKeyDialog(QDialog):
 
     def get_data(self):
         if self.is_batch_add_mode or self.is_batch_edit_mode:
-            return self.key_value_pairs # 返回列表
+            return self.key_value_pairs
         else:
-            return self.key_value_pairs[0] if self.key_value_pairs else ("", "") # 返回元组
+            return self.key_value_pairs[0] if self.key_value_pairs else ("", "")
 
 class VersionDialog(QDialog):
     """选择 TXT 文件对应的游戏版本。"""
@@ -940,12 +933,17 @@ class GXTEditorApp(QMainWindow):
         self.data = {}
         self.version = None
         self.filepath = None
-        self.file_type = None # 'gxt' or 'dat'
+        self.file_type = None
         self.current_table = None
         self.value_display_limit = 60
         self.version_filename_map = {'IV': 'GTA4.txt', 'VC': 'GTAVC.txt', 'SA': 'GTASA.txt', 'III': 'GTA3.txt'}
+        self.modified = False
+        
+        # --- 持久化设置 ---
+        self.settings_path = "GXT编辑器设置.json" # 修复点：汉化文件名
         self.remember_gen_extra_choice = None
-        self.modified = False  # 新增：标记文件是否已修改
+        self._load_settings()
+
 
         # --- UI ---
         self._apply_neutral_dark_theme()
@@ -956,6 +954,30 @@ class GXTEditorApp(QMainWindow):
         if self.file_to_open:
             QTimer.singleShot(300, lambda: self.open_file(path=self.file_to_open))
 
+    # ====== 设置持久化 ======
+    def _load_settings(self):
+        """从 JSON 文件加载设置"""
+        try:
+            if os.path.exists(self.settings_path):
+                with open(self.settings_path, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    # 修复点：使用汉化后的键名
+                    self.remember_gen_extra_choice = settings.get('记住生成额外文件的选择')
+        except Exception as e:
+            print(f"无法加载设置: {e}")
+
+    def _save_settings(self):
+        """将设置保存到 JSON 文件"""
+        try:
+            settings = {
+                # 修复点：使用汉化后的键名
+                '记住生成额外文件的选择': self.remember_gen_extra_choice
+            }
+            with open(self.settings_path, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"无法保存设置: {e}")
+            
     # ====== 主题 ======
     def _apply_neutral_dark_theme(self):
         """应用中性深色主题"""
@@ -1038,14 +1060,10 @@ class GXTEditorApp(QMainWindow):
             QPushButton:pressed {{
                 background-color: #2a2a2e;
             }}
-
-            /* ========== 新增样式：增强版本选择按钮的选中效果 ========== */
             QPushButton:checked {{
                 background-color: {highlight.name()};
                 border-color: {QColor(highlight).lighter(120).name()};
             }}
-            /* ======================================================= */
-
             QLineEdit, QTextEdit, QListWidget, QTableWidget, QComboBox {{
                 background-color: {darker_bg.name()};
                 color: {text_color.name()};
@@ -1154,8 +1172,8 @@ class GXTEditorApp(QMainWindow):
 
     def _setup_body(self):
         self.tables_dock = QDockWidget("表列表", self)
-        self.tables_dock.setMaximumWidth(200)  # 限制最大宽度
-        self.tables_dock.setMinimumWidth(150)  # 设置最小宽度
+        self.tables_dock.setMaximumWidth(200)
+        self.tables_dock.setMinimumWidth(150)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.tables_dock)
         
         left = QWidget()
@@ -1172,9 +1190,9 @@ class GXTEditorApp(QMainWindow):
         self.table_list = QListWidget()
         self.table_list.itemSelectionChanged.connect(self.select_table)
         self.table_list.itemDoubleClicked.connect(self.rename_table)
-        left_layout.addWidget(self.table_list, 1)  # 给列表更多空间
+        left_layout.addWidget(self.table_list, 1)
         
-        # 按钮布局 - 使用紧凑布局
+        # 按钮布局
         btn_layout = QHBoxLayout()
         self.btn_add_table = QPushButton("➕")
         self.btn_add_table.setToolTip("添加表")
@@ -1214,7 +1232,7 @@ class GXTEditorApp(QMainWindow):
         self.table.doubleClicked.connect(self.on_table_double_click)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(0, 50)  # 减小序号列宽度
+        self.table.setColumnWidth(0, 50)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         
@@ -1224,9 +1242,9 @@ class GXTEditorApp(QMainWindow):
         
         c_layout.addWidget(self.table)
         
-        # 底部按钮栏 - 移动到表格下方
+        # 底部按钮栏
         key_btns = QHBoxLayout()
-        key_btns.setContentsMargins(0, 5, 0, 0)  # 添加上边距
+        key_btns.setContentsMargins(0, 5, 0, 0)
         btn_kadd = QPushButton("➕ 添加键")
         btn_clear = QPushButton("💥 清空此表")
         
@@ -1235,7 +1253,7 @@ class GXTEditorApp(QMainWindow):
         
         key_btns.addWidget(btn_kadd)
         key_btns.addWidget(btn_clear)
-        key_btns.addStretch()  # 添加弹性空间使按钮左对齐
+        key_btns.addStretch()
         c_layout.addLayout(key_btns)
         
         self.setCentralWidget(central)
@@ -1252,7 +1270,6 @@ class GXTEditorApp(QMainWindow):
         if count == 0:
             return
 
-        # 根据选中数量，显示不同的编辑菜单项
         if count == 1:
             edit_action = QAction("✏️ 编辑", self)
             edit_action.triggered.connect(self.edit_selected_items)
@@ -1317,36 +1334,63 @@ class GXTEditorApp(QMainWindow):
         self.update_status(f"查看表: {self.current_table}，共 {len(self.data.get(self.current_table, {}))} 个键值对")
 
     def refresh_keys(self):
-        self.table.setRowCount(0)
-        if self.current_table and self.current_table in self.data:
-            for idx, (k, v) in enumerate(sorted(self.data[self.current_table].items()), 1):
-                display_value = v if len(v) <= self.value_display_limit else v[:self.value_display_limit] + "..."
-                self._insert_row(idx, k, display_value, v)
+        """优化后的表格刷新方法"""
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(0)
+            if self.current_table and self.current_table in self.data:
+                items_to_display = sorted(self.data[self.current_table].items())
+                self.table.setRowCount(len(items_to_display))
+                
+                for idx, (k, v) in enumerate(items_to_display):
+                    display_value = v if len(v) <= self.value_display_limit else v[:self.value_display_limit] + "..."
+                    
+                    # 使用 setItem 填充
+                    idx_item = QTableWidgetItem(str(idx + 1))
+                    idx_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.table.setItem(idx, 0, idx_item)
+                    self.table.setItem(idx, 1, QTableWidgetItem(k))
+                    value_item = QTableWidgetItem(display_value)
+                    value_item.setData(Qt.ItemDataRole.UserRole, v)
+                    self.table.setItem(idx, 2, value_item)
+        finally:
+            self.table.setUpdatesEnabled(True)
 
     def _insert_row(self, idx, key, display_value, full_value):
-        row = self.table.rowCount()
-        self.table.insertRow(row)
-        idx_item = QTableWidgetItem(str(idx))
-        idx_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.table.setItem(row, 0, idx_item)
-        self.table.setItem(row, 1, QTableWidgetItem(key))
-        value_item = QTableWidgetItem(display_value)
-        value_item.setData(Qt.ItemDataRole.UserRole, full_value)
-        self.table.setItem(row, 2, value_item)
+        """此方法已弃用，逻辑合并到 refresh_keys 和 search_key_value 中"""
+        pass
 
     def search_key_value(self):
+        """优化后的搜索方法"""
         keyword = self.key_search.text().lower()
-        self.table.setRowCount(0)
-        count = 0
-        if self.current_table and self.current_table in self.data:
-            current_index = 1
-            for k, v in sorted(self.data[self.current_table].items()):
-                if keyword in k.lower() or keyword in str(v).lower():
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(0)
+            if self.current_table and self.current_table in self.data:
+                # 1. 先在内存中筛选出所有匹配项
+                matching_items = []
+                for k, v in sorted(self.data[self.current_table].items()):
+                    if keyword in k.lower() or keyword in str(v).lower():
+                        matching_items.append((k, v))
+                
+                # 2. 一次性设置行数
+                self.table.setRowCount(len(matching_items))
+
+                # 3. 循环填充
+                for idx, (k, v) in enumerate(matching_items):
                     display_value = v if len(v) <= self.value_display_limit else v[:self.value_display_limit] + "..."
-                    self._insert_row(current_index, k, display_value, v)
-                    current_index += 1
-            count = current_index - 1
-        self.update_status(f"搜索结果: {count} 个匹配项")
+                    
+                    idx_item = QTableWidgetItem(str(idx + 1))
+                    idx_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.table.setItem(idx, 0, idx_item)
+                    self.table.setItem(idx, 1, QTableWidgetItem(k))
+                    value_item = QTableWidgetItem(display_value)
+                    value_item.setData(Qt.ItemDataRole.UserRole, v)
+                    self.table.setItem(idx, 2, value_item)
+                
+                self.update_status(f"搜索结果: {len(matching_items)} 个匹配项")
+        finally:
+            self.table.setUpdatesEnabled(True)
 
     def validate_table_name(self, name):
         """验证表名是否符合当前版本的规则"""
@@ -1354,8 +1398,14 @@ class GXTEditorApp(QMainWindow):
             return re.match(r'^[0-9A-Z_]{1,7}$', name) is not None
         elif self.version == 'IV':
             return re.match(r'^[0-9a-zA-Z_]{1,7}$', name) is not None
-        # 对于III代或无特定规则的版本，默认允许
         return True
+    
+    def _validate_key_for_import(self, key, version):
+        """用于导入时验证键名的辅助函数，不依赖对话框实例"""
+        dialog_helper = EditKeyDialog(version=version)
+        is_valid = dialog_helper.validate_key(key)
+        message = dialog_helper.get_validation_error_message()
+        return is_valid, message
 
     def get_table_validation_error_message(self):
         """获取当前版本表名的验证错误信息"""
@@ -1376,7 +1426,6 @@ class GXTEditorApp(QMainWindow):
         name, ok = QInputDialog.getText(self, "新建表", "请输入表名：")
         if ok and name.strip():
             name = name.strip()
-            # [新增] 表名格式验证
             if not self.validate_table_name(name):
                 QMessageBox.warning(self, "错误", f"表名 '{name}' 格式不正确！\n{self.get_table_validation_error_message()}")
                 return
@@ -1418,7 +1467,6 @@ class GXTEditorApp(QMainWindow):
         new, ok = QInputDialog.getText(self, "重命名表", "请输入新名称：", text=old)
         if ok and new.strip():
             new = new.strip()
-            # [新增] 表名格式验证
             if not self.validate_table_name(new):
                 QMessageBox.warning(self, "错误", f"表名 '{new}' 格式不正确！\n{self.get_table_validation_error_message()}")
                 return
@@ -1462,7 +1510,6 @@ class GXTEditorApp(QMainWindow):
         if count == 0: return
 
         if count == 1:
-            # --- 单个编辑 ---
             row = selected_rows[0].row()
             key = self.table.item(row, 1).text()
             original_value = self.data[self.current_table].get(key, "")
@@ -1471,21 +1518,18 @@ class GXTEditorApp(QMainWindow):
             if dlg.exec() == QDialog.DialogCode.Accepted:
                 new_key, new_val = dlg.get_data()
                 
-                # 检查键名冲突
                 if new_key != key and new_key in self.data[self.current_table]:
                     QMessageBox.critical(self, "错误", f"键名 '{new_key}' 已存在！")
                     return
                 
-                # 更新数据
                 if new_key != key:
                     del self.data[self.current_table][key]
                 self.data[self.current_table][new_key] = new_val
                 
-                self.refresh_keys()
+                self.search_key_value()
                 self.update_status(f"已更新键: {new_key}")
                 self.set_modified(True)
         else:
-            # --- 批量编辑 ---
             original_pairs = []
             for idx in selected_rows:
                 key = self.table.item(idx.row(), 1).text()
@@ -1502,7 +1546,6 @@ class GXTEditorApp(QMainWindow):
             if dlg.exec() == QDialog.DialogCode.Accepted:
                 new_pairs = dlg.get_data()
 
-                # 检查键名冲突
                 all_keys_in_table = set(self.data[self.current_table].keys())
                 original_keys_set = set(original_keys)
                 other_keys_on_table = all_keys_in_table - original_keys_set
@@ -1513,13 +1556,12 @@ class GXTEditorApp(QMainWindow):
                     QMessageBox.critical(self, "键名冲突", f"发现键名冲突: {', '.join(conflicts)}\n这些键已在表中存在且不属于当前编辑的条目。")
                     return
                 
-                # 应用更改
                 for key in original_keys:
                     del self.data[self.current_table][key]
                 for key, value in new_pairs:
                     self.data[self.current_table][key] = value
                 
-                self.refresh_keys()
+                self.search_key_value()
                 self.update_status(f"已批量更新 {len(new_pairs)} 个键值对")
                 self.set_modified(True)
 
@@ -1532,7 +1574,7 @@ class GXTEditorApp(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             result = dlg.get_data()
             
-            if isinstance(result, list):  # 批量添加模式
+            if isinstance(result, list):
                 pairs = result
                 added_count = 0
                 duplicate_keys = []
@@ -1557,7 +1599,7 @@ class GXTEditorApp(QMainWindow):
                 self.update_status(f"批量添加了 {added_count} 个键值对")
                 if added_count > 0: self.set_modified(True)
 
-            else:  # 单个添加模式
+            else:
                 new_key, new_val = result
                 if new_key in self.data[self.current_table]:
                     QMessageBox.critical(self, "错误", f"键名 '{new_key}' 已存在！")
@@ -1579,7 +1621,7 @@ class GXTEditorApp(QMainWindow):
             keys_to_delete = {self.table.item(idx.row(), 1).text() for idx in rows}
             for k in keys_to_delete:
                 self.data[self.current_table].pop(k, None)
-            self.refresh_keys()
+            self.search_key_value()
             self.update_status(f"已删除 {len(keys_to_delete)} 个键值对")
             self.set_modified(True)
 
@@ -1624,14 +1666,13 @@ class GXTEditorApp(QMainWindow):
         self.update_status(f"已创建新GXT文件 (版本: {self.version})")
         self._update_ui_for_file_type()
         self.set_modified(False)
-        # 添加成功弹窗
         QMessageBox.information(self, "成功", f"已成功创建新的GXT文件\n版本: {self.version}")
 
     def new_whm(self):
         """新建WHM文件"""
         if self.modified and not self.prompt_save(): return
         self.data.clear()
-        self.version = "IV"  # WHM文件使用GTA IV的哈希算法
+        self.version = "IV"
         self.filepath = None
         self.file_type = 'dat'
         self.current_table = "whm_table"
@@ -1642,7 +1683,6 @@ class GXTEditorApp(QMainWindow):
         self.update_status("已创建新WHM文件")
         self._update_ui_for_file_type()
         self.set_modified(False)
-        # 添加成功弹窗
         QMessageBox.information(self, "成功", "已成功创建新的WHM文件")
 
     def open_file_dialog(self):
@@ -1706,38 +1746,132 @@ class GXTEditorApp(QMainWindow):
             QMessageBox.critical(self, "错误", f"打开文件失败: {str(e)}")
 
     def open_txt(self, files=None):
-        if self.modified and not self.prompt_save(): return
-        dlg = VersionDialog(self, default="IV")
-        if dlg.exec() != QDialog.DialogCode.Accepted: return
-        version = dlg.get_value()
+        is_merge_mode = self.version is not None
+        
+        if is_merge_mode:
+            version = self.version
+            if self.modified and not self.prompt_save():
+                return
+        else:
+            if self.modified and not self.prompt_save():
+                return
+            dlg = VersionDialog(self, default="IV")
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            version = dlg.get_value()
+
         if not files:
             files, _ = QFileDialog.getOpenFileNames(self, "打开TXT文件", "", "文本文件 (*.txt);;所有文件 (*.*)")
-        if not files: return
+        if not files:
+            return
+
         try:
-            self.data.clear()
+            temp_data = {}
+            # 步骤 1: 解析所有文件并验证键名
             if version == 'IV':
-                merged_data = {}
+                all_invalid_keys = []
                 for file_path in files:
-                    txt_data, _ = load_iv_txt(Path(file_path))
-                    for table_name, entries in txt_data.items():
-                        if table_name not in merged_data: merged_data[table_name] = {}
-                        for entry in entries: merged_data[table_name][entry['hash_string']] = entry['translated']
-                self.data = merged_data
+                    # 直接将验证函数传给 load_iv_txt
+                    parsed_data, invalid_keys, _ = load_iv_txt(Path(file_path), validate_callback=self._validate_key_for_import)
+                    if invalid_keys:
+                        for key, line_num, msg in invalid_keys:
+                             all_invalid_keys.append((key, line_num, file_path, msg))
+                        continue
+
+                    for table_name, entries in parsed_data.items():
+                        if table_name not in temp_data:
+                            temp_data[table_name] = {}
+                        for entry in entries:
+                            temp_data[table_name][entry['hash_string']] = entry['translated']
+                
+                if all_invalid_keys:
+                    error_msg = f"在导入的TXT文件中发现 {len(all_invalid_keys)} 个无效键名:\n"
+                    for key, line_num, file_path, msg in all_invalid_keys[:10]:
+                        error_msg += f"- 文件 '{os.path.basename(file_path)}', 第 {line_num} 行, 键 '{key}': {msg}\n"
+                    if len(all_invalid_keys) > 10:
+                        error_msg += f"...等 {len(all_invalid_keys) - 10} 个其他错误。"
+                    QMessageBox.critical(self, "导入错误", error_msg)
+                    return
+
             else:
                 reader = getReader(version)
-                self.data = self._load_standard_txt(files, has_tables=reader.hasTables())
-            self.version = version
-            self.filepath = None
-            self.file_type = 'gxt'
+                temp_data, invalid_keys = self._load_standard_txt(files, reader.hasTables(), version)
+                if invalid_keys:
+                    error_msg = "在导入的TXT文件中发现无效键名:\n"
+                    for key, line_num, file_path, msg in invalid_keys[:10]:
+                        error_msg += f"- 文件 '{os.path.basename(file_path)}', 第 {line_num} 行, 键 '{key}': {msg}\n"
+                    if len(invalid_keys) > 10:
+                        error_msg += f"...等 {len(invalid_keys) - 10} 个其他错误。"
+                    QMessageBox.critical(self, "导入错误", error_msg)
+                    return
+            
+            # 步骤 2: 如果是全新加载, 直接设置数据
+            if not is_merge_mode:
+                self.data = temp_data
+                self.version = version
+                self.filepath = None
+                self.file_type = 'gxt'
+                # 修复点：将首次导入视为“打开”，不标记为修改
+                self.set_modified(False) 
+                QMessageBox.information(self, "成功", f"已成功打开 {len(files)} 个TXT文件\n版本: {version}\n表数量: {len(self.data)}")
+            else:
+                # 步骤 3: 【优化】合并数据并一次性提示覆盖
+                self._merge_data_with_optimized_prompt(temp_data)
+
+            # 最后的UI更新
             self.table_search.clear()
             self.filter_tables()
-            if self.table_list.count() > 0: self.table_list.setCurrentRow(0)
-            self.update_status(f"已打开 {len(files)} 个TXT文件 (版本: {version})")
-            QMessageBox.information(self, "成功", f"已成功打开{len(files)}个TXT文件\n版本: {version}\n表数量: {len(self.data)}")
+            if self.table_list.count() > 0:
+                self.table_list.setCurrentRow(0)
+            self.update_status(f"已处理 {len(files)} 个TXT文件 (版本: {version})")
             self._update_ui_for_file_type()
-            self.set_modified(False)
+
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"打开文件失败: {str(e)}")
+            QMessageBox.critical(self, "错误", f"打开或合并文件失败: {e}")
+
+    def _merge_data_with_optimized_prompt(self, temp_data):
+        """优化的合并逻辑：先检查所有冲突，再进行一次性询问"""
+        # 1. 高效找出所有冲突的键
+        existing_keys = set((table, key) for table, keys in self.data.items() for key in keys)
+        conflicts = []
+        for table, keys in temp_data.items():
+            for key in keys:
+                if (table, key) in existing_keys:
+                    conflicts.append((table, key))
+
+        # 2. 根据是否存在冲突，决定是否询问
+        should_overwrite = False
+        if conflicts:
+            # 修复点：手动创建QMessageBox以确保按钮汉化
+            msg_box = QMessageBox(QMessageBox.Icon.Question, "确认覆盖",
+                                  f"发现 {len(conflicts)} 个重复的键值对。是否要全部覆盖？",
+                                  QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
+            msg_box.button(QMessageBox.StandardButton.Yes).setText("是")
+            msg_box.button(QMessageBox.StandardButton.No).setText("否")
+            msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+            if msg_box.exec() == QMessageBox.StandardButton.Yes:
+                should_overwrite = True
+        
+        # 3. 执行合并
+        added_count = 0
+        overwritten_count = 0
+        for table_name, table_data in temp_data.items():
+            if table_name not in self.data:
+                self.data[table_name] = {}
+                
+            for key, value in table_data.items():
+                if key in self.data[table_name]: # 是一个冲突键
+                    if should_overwrite:
+                        self.data[table_name][key] = value
+                        overwritten_count += 1
+                else: # 是一个新键
+                    self.data[table_name][key] = value
+                    added_count += 1
+        
+        if added_count > 0 or overwritten_count > 0:
+            self.set_modified(True)
+            QMessageBox.information(self, "合并完成", f"合并完成。\n\n- 新增键值: {added_count}\n- 覆盖键值: {overwritten_count}")
+
 
     def _update_ui_for_file_type(self):
         is_dat = self.file_type == 'dat'
@@ -1777,7 +1911,7 @@ class GXTEditorApp(QMainWindow):
             if os.path.basename(path).lower() != expected_filename:
                 QMessageBox.critical(self, "保存错误", f"文件类型不匹配。\n文件名必须是 '{expected_filename}'。")
                 return
-        else: # GXT file
+        else: 
             if not path.lower().endswith(expected_ext):
                 QMessageBox.critical(self, "保存错误", f"文件类型不匹配。\n请使用 '{expected_ext}' 扩展名保存此文件类型。")
                 return
@@ -1814,8 +1948,11 @@ class GXTEditorApp(QMainWindow):
             check_box = QCheckBox("记住我的选择")
             msg_box.setCheckBox(check_box)
             reply = msg_box.exec()
-            if check_box.isChecked(): self.remember_gen_extra_choice = (reply == QMessageBox.StandardButton.Yes)
+
             gen_extra = (reply == QMessageBox.StandardButton.Yes)
+            if check_box.isChecked():
+                self.remember_gen_extra_choice = gen_extra
+                self._save_settings()
         else:
             gen_extra = self.remember_gen_extra_choice
 
@@ -1837,11 +1974,11 @@ class GXTEditorApp(QMainWindow):
                 if gen_extra: process_special_chars(all_chars)
             elif self.version == 'VC':
                 g = VCGXT()
-                # 修复：对表进行排序，确保MAIN表优先
                 sorted_items = sorted(self.data.items(), key=cmp_to_key(lambda a, b: -1 if g._table_sort_method(a[0], b[0]) else 1))
                 sorted_data = OrderedDict(sorted_items)
                 g.m_GxtData = {t: {k: g._utf8_to_utf16(v) for k, v in d.items()} for t, d in sorted_data.items()}
                 if gen_extra: 
+                    all_chars = {c for table in self.data.values() for value in table.values() for c in value}
                     g.m_WideCharCollection = {ord(c) for c in all_chars if ord(c) > 0x7F}
                     g.GenerateWMHHZStuff()
                 else:
@@ -1850,7 +1987,6 @@ class GXTEditorApp(QMainWindow):
                 g.SaveAsGXT(os.path.basename(path))
             elif self.version == 'SA':
                 g = SAGXT()
-                # 修复：对表进行排序，确保MAIN表优先
                 def table_sort_method(lhs, rhs):
                     if rhs == "MAIN":
                         return False
@@ -1862,6 +1998,7 @@ class GXTEditorApp(QMainWindow):
                 sorted_data = OrderedDict(sorted_items)
                 g.m_GxtData = {t: {int(k, 16): v for k, v in d.items()} for t, d in sorted_data.items()}
                 if gen_extra: 
+                    all_chars = {c for table in self.data.values() for value in table.values() for c in value}
                     g.m_WideCharCollection = {c for c in all_chars if ord(c) > 0x7F}
                     g.generate_wmhhz_stuff()
                 else:
@@ -1872,6 +2009,7 @@ class GXTEditorApp(QMainWindow):
                 g = LCGXT()
                 g.m_GxtData = {k: g.utf8_to_utf16(v) for k, v in self.data.get('MAIN', {}).items()}
                 if gen_extra: 
+                    all_chars = {c for v in self.data.get('MAIN', {}).values() for c in v}
                     g.m_WideCharCollection = {ord(c) for c in all_chars if ord(c) >= 0x80}
                     g.generate_wmhhz_stuff()
                 else:
@@ -1931,22 +2069,35 @@ class GXTEditorApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"导出失败: {str(e)}")
 
-    def _load_standard_txt(self, files, has_tables):
+    def _load_standard_txt(self, files, has_tables, version):
         data = {}
+        invalid_keys = []
         current_table = "MAIN" if not has_tables else None
         if not has_tables: data["MAIN"] = {}
+        
         for file_path in files:
             with open(file_path, 'r', encoding='utf-8-sig') as f:
-                for line in f:
+                for line_num, line in enumerate(f, 1):
                     line = line.strip()
                     if not line: continue
+                    
                     if has_tables and line.startswith('[') and line.endswith(']'):
                         current_table = line[1:-1].strip()
-                        if current_table and current_table not in data: data[current_table] = {}
+                        if current_table and current_table not in data:
+                            data[current_table] = {}
                     elif '=' in line and current_table is not None:
                         key, value = line.split('=', 1)
-                        if key.strip(): data[current_table][key.strip()] = value.strip()
-        return data
+                        key = key.strip()
+                        
+                        is_valid, msg = self._validate_key_for_import(key, version)
+                        if not is_valid:
+                            invalid_keys.append((key, line_num, file_path, msg))
+                            continue
+                            
+                        if key:
+                            data[current_table][key] = value.strip()
+                            
+        return data, invalid_keys
 
     # ====== 辅助与工具 ======
     def collect_and_filter_chars(self):
@@ -2021,7 +2172,7 @@ class GXTEditorApp(QMainWindow):
             "6. 复制：选择多行后右键选择“复制”。\n"
             "7. 保存：支持生成字符映射辅助文件（可选），并可记住选择。\n"
             "8. 导出：支持导出整个GXT或单个表为TXT文件。\n"
-            "9. TXT 导入：支持单个或多个TXT导入并直接生成GXT。\n"
+            "9. TXT 导入：支持单个或多个TXT导入并直接生成GXT。如果已有GXT打开，则会进行合并。\n"
             "10. GTA IV 特别说明：键名可为明文（如 T1_NAME_82）或哈希（0xhash），保存时自动转换哈希。\n"
             "11. WHM Table 支持：可以打开和保存以及编辑 GTA4 民间汉化补丁的 whm_table.dat 文件。\n"
             "12. 字体生成器：工具菜单→GTA字体贴图生成器，用于创建游戏字体PNG文件。以及支持加载外部字体文件，点击预览图可放大查看。【仅限：汉化字体贴图】")
@@ -2074,10 +2225,10 @@ class GXTEditorApp(QMainWindow):
         
         if reply == QMessageBox.StandardButton.Save:
             self.save_file()
-            return not self.modified # 如果保存失败，modified仍为True
+            return not self.modified
         elif reply == QMessageBox.StandardButton.Discard:
             return True
-        else: # Cancel
+        else:
             return False
 
     def closeEvent(self, event):

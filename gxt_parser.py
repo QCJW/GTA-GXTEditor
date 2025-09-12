@@ -122,6 +122,10 @@ class IV:
         return True
 
     def parseTables(self, stream):
+        # 检查是否存在 TABL，如果没有就直接 fallback 到 main
+        peek = stream.peek(16)
+        if b'TABL' not in peek:
+            return [("MAIN", 0)]
         return _parseTables(stream)
 
     def parseTKeyTDat(self, stream):
@@ -240,13 +244,17 @@ def parseTKeyTDat_common(stream, entry_size, key_format, value_encoding):
     return Entries
 
 def findBlock(stream, block):
-    peek = stream.peek(4096)
-    idx = peek.find(block.encode())
-    if idx == -1:
-        while stream.peek(4)[:4] != block.encode():
-            stream.seek(1, os.SEEK_CUR)
-    else:
-        stream.seek(idx, os.SEEK_CUR)
+    file_size = os.fstat(stream.fileno()).st_size  # 获取文件大小
+    while True:
+        peek = stream.peek(4096)
+        idx = peek.find(block.encode())
+        if idx != -1:
+            stream.seek(idx, os.SEEK_CUR)
+            break
+        else:
+            if stream.tell() + 4096 >= file_size:
+                raise ValueError(f"Block '{block}' not found in stream")
+            stream.seek(4096 - 4, os.SEEK_CUR)  # 重叠4字节以防块跨边界
     _, size = struct.unpack('4sI', stream.read(8))
     return size
 
