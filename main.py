@@ -8,7 +8,7 @@ from PySide6.QtGui import QIcon
 from collections import OrderedDict
 from functools import cmp_to_key
 
-from PySide6.QtCore import Qt, QTimer, QRect, Signal, QPoint, QPointF
+from PySide6.QtCore import Qt, QTimer, QRect, Signal, QPoint, QPointF, QTranslator, QLibraryInfo
 from PySide6.QtGui import (
     QPalette, QColor, QAction, QGuiApplication, QFont,
     QPixmap, QPainter, QImage, QFontDatabase, QCursor, QFontMetrics
@@ -356,8 +356,8 @@ class FontSelectionWidget(QWidget):
 
     def update_font_display(self):
         style = []
-        if self.font.bold(): style.append("Bold")
-        if self.font.italic(): style.append("Italic")
+        if self.font.bold(): style.append("粗体")
+        if self.font.italic(): style.append("斜体")
         style_str = ", ".join(style) if style else "常规"
         self.font_display_label.setText(f"{self.font.family()}, {self.font.pointSize()}pt, {style_str}")
 
@@ -701,7 +701,6 @@ class EditKeyDialog(QDialog):
 
         single_layout.addWidget(QLabel("值 (Value):"))
         
-        # 修复点：强制使用 setPlainText 以避免 HTML 解析
         self.value_edit = QTextEdit()
         self.value_edit.setPlainText(value)
         
@@ -946,6 +945,7 @@ class GXTEditorApp(QMainWindow):
         # --- 持久化设置 ---
         self.settings_path = "GXT编辑器设置.json"
         self.remember_gen_extra_choice = None
+        self.save_prompt_choice = None # 新增：用于记住“是否保存”的选择
         self._load_settings()
 
 
@@ -966,6 +966,7 @@ class GXTEditorApp(QMainWindow):
                 with open(self.settings_path, 'r', encoding='utf-8') as f:
                     settings = json.load(f)
                     self.remember_gen_extra_choice = settings.get('记住生成额外文件的选择')
+                    self.save_prompt_choice = settings.get('文件变更时的默认操作') # 新增
         except Exception as e:
             print(f"无法加载设置: {e}")
 
@@ -973,7 +974,8 @@ class GXTEditorApp(QMainWindow):
         """将设置保存到 JSON 文件"""
         try:
             settings = {
-                '记住生成额外文件的选择': self.remember_gen_extra_choice
+                '记住生成额外文件的选择': self.remember_gen_extra_choice,
+                '文件变更时的默认操作': self.save_prompt_choice # 新增
             }
             with open(self.settings_path, 'w', encoding='utf-8') as f:
                 json.dump(settings, f, indent=4, ensure_ascii=False)
@@ -1248,13 +1250,10 @@ class GXTEditorApp(QMainWindow):
         key_btns = QHBoxLayout()
         key_btns.setContentsMargins(0, 5, 0, 0)
         btn_kadd = QPushButton("➕ 添加键")
-        btn_clear = QPushButton("💥 清空此表")
         
         btn_kadd.clicked.connect(self.add_key)
-        btn_clear.clicked.connect(self.clear_current_table)
         
         key_btns.addWidget(btn_kadd)
-        key_btns.addWidget(btn_clear)
         key_btns.addStretch()
         c_layout.addLayout(key_btns)
         
@@ -1357,10 +1356,6 @@ class GXTEditorApp(QMainWindow):
                     self.table.setItem(idx, 2, value_item)
         finally:
             self.table.setUpdatesEnabled(True)
-
-    def _insert_row(self, idx, key, display_value, full_value):
-        """此方法已弃用，逻辑合并到 refresh_keys 和 search_key_value 中"""
-        pass
 
     def search_key_value(self):
         """优化后的搜索方法"""
@@ -1627,18 +1622,6 @@ class GXTEditorApp(QMainWindow):
             self.update_status(f"已删除 {len(keys_to_delete)} 个键值对")
             self.set_modified(True)
 
-    def clear_current_table(self):
-        if not self.current_table: return
-        msg_box = QMessageBox(QMessageBox.Icon.Question, "确认", f"是否清空表 '{self.current_table}' 中的所有键值对？\n此操作不可恢复！", 
-                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
-        msg_box.button(QMessageBox.StandardButton.Yes).setText("是")
-        msg_box.button(QMessageBox.StandardButton.No).setText("否")
-        if msg_box.exec() == QMessageBox.StandardButton.Yes:
-            self.data[self.current_table].clear()
-            self.refresh_keys()
-            self.update_status(f"已清空表 {self.current_table}")
-            self.set_modified(True)
-
     def copy_selected(self):
         if not self.current_table: return
         rows = self.table.selectionModel().selectedRows()
@@ -1750,9 +1733,7 @@ class GXTEditorApp(QMainWindow):
     def open_txt(self, files=None):
         is_merge_mode = self.version is not None
         
-        # 修复点：导入TXT时不检查modified状态，因为它是一个合并/添加操作
         if not is_merge_mode:
-            # 如果是首次导入（新文件），仍然检查，因为可能存在一个无文件路径的“新建”状态
             if self.modified and not self.prompt_save():
                 return
             
@@ -1774,7 +1755,6 @@ class GXTEditorApp(QMainWindow):
             if version == 'IV':
                 all_invalid_keys = []
                 for file_path in files:
-                    # 直接将验证函数传给 load_iv_txt
                     parsed_data, invalid_keys, _ = load_iv_txt(Path(file_path), validate_callback=self._validate_key_for_import)
                     if invalid_keys:
                         for key, line_num, msg in invalid_keys:
@@ -2214,6 +2194,14 @@ class GXTEditorApp(QMainWindow):
 
     def prompt_save(self):
         """提示用户保存未保存的更改。返回True表示可以继续，False表示取消操作。"""
+        # 新增：检查是否已有记住的选择
+        if self.save_prompt_choice == 'Save':
+            self.save_file()
+            return not self.modified
+        if self.save_prompt_choice == 'Discard':
+            return True
+
+        # 如果没有记住的选择，则弹出对话框
         msg_box = QMessageBox(QMessageBox.Icon.Question, "确认", "文件已被修改，是否保存更改？",
                              QMessageBox.StandardButton.Save | 
                              QMessageBox.StandardButton.Discard | 
@@ -2222,14 +2210,26 @@ class GXTEditorApp(QMainWindow):
         msg_box.button(QMessageBox.StandardButton.Discard).setText("不保存")
         msg_box.button(QMessageBox.StandardButton.Cancel).setText("取消")
         
+        check_box = QCheckBox("记住我的选择")
+        msg_box.setCheckBox(check_box)
+        
         reply = msg_box.exec()
         
+        # 如果勾选了“记住”，则保存选择
+        if check_box.isChecked():
+            if reply == QMessageBox.StandardButton.Save:
+                self.save_prompt_choice = 'Save'
+                self._save_settings()
+            elif reply == QMessageBox.StandardButton.Discard:
+                self.save_prompt_choice = 'Discard'
+                self._save_settings()
+
         if reply == QMessageBox.StandardButton.Save:
             self.save_file()
             return not self.modified
         elif reply == QMessageBox.StandardButton.Discard:
             return True
-        else:
+        else: # Cancel
             return False
 
     def closeEvent(self, event):
@@ -2248,6 +2248,22 @@ if __name__ == "__main__":
     import sys
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
+
+    # 新增：加载Qt中文翻译，实现标准对话框的汉化
+    translator = QTranslator()
+    # 获取PySide6自带的翻译文件路径
+    translations_path = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    qt_zh_cn_path = os.path.join(translations_path, 'qt_zh_CN.qm')
+    
+    if os.path.exists(qt_zh_cn_path):
+        if translator.load(qt_zh_cn_path):
+            app.installTranslator(translator)
+            print("成功加载Qt中文语言包。")
+        else:
+            print("加载Qt中文语言包失败。")
+    else:
+        print(f"未找到Qt中文语言包: {qt_zh_cn_path}")
+
 
     file_to_open = None
     if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
