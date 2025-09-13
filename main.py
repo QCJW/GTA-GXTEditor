@@ -700,7 +700,11 @@ class EditKeyDialog(QDialog):
         single_layout.addLayout(key_layout)
 
         single_layout.addWidget(QLabel("值 (Value):"))
-        self.value_edit = QTextEdit(value)
+        
+        # 修复点：强制使用 setPlainText 以避免 HTML 解析
+        self.value_edit = QTextEdit()
+        self.value_edit.setPlainText(value)
+        
         single_layout.addWidget(self.value_edit, 1)
         layout.addWidget(self.single_mode_widget)
 
@@ -940,7 +944,7 @@ class GXTEditorApp(QMainWindow):
         self.modified = False
         
         # --- 持久化设置 ---
-        self.settings_path = "GXT编辑器设置.json" # 修复点：汉化文件名
+        self.settings_path = "GXT编辑器设置.json"
         self.remember_gen_extra_choice = None
         self._load_settings()
 
@@ -961,7 +965,6 @@ class GXTEditorApp(QMainWindow):
             if os.path.exists(self.settings_path):
                 with open(self.settings_path, 'r', encoding='utf-8') as f:
                     settings = json.load(f)
-                    # 修复点：使用汉化后的键名
                     self.remember_gen_extra_choice = settings.get('记住生成额外文件的选择')
         except Exception as e:
             print(f"无法加载设置: {e}")
@@ -970,7 +973,6 @@ class GXTEditorApp(QMainWindow):
         """将设置保存到 JSON 文件"""
         try:
             settings = {
-                # 修复点：使用汉化后的键名
                 '记住生成额外文件的选择': self.remember_gen_extra_choice
             }
             with open(self.settings_path, 'w', encoding='utf-8') as f:
@@ -1748,17 +1750,18 @@ class GXTEditorApp(QMainWindow):
     def open_txt(self, files=None):
         is_merge_mode = self.version is not None
         
-        if is_merge_mode:
-            version = self.version
+        # 修复点：导入TXT时不检查modified状态，因为它是一个合并/添加操作
+        if not is_merge_mode:
+            # 如果是首次导入（新文件），仍然检查，因为可能存在一个无文件路径的“新建”状态
             if self.modified and not self.prompt_save():
                 return
-        else:
-            if self.modified and not self.prompt_save():
-                return
+            
             dlg = VersionDialog(self, default="IV")
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
             version = dlg.get_value()
+        else:
+            version = self.version
 
         if not files:
             files, _ = QFileDialog.getOpenFileNames(self, "打开TXT文件", "", "文本文件 (*.txt);;所有文件 (*.*)")
@@ -1811,7 +1814,6 @@ class GXTEditorApp(QMainWindow):
                 self.version = version
                 self.filepath = None
                 self.file_type = 'gxt'
-                # 修复点：将首次导入视为“打开”，不标记为修改
                 self.set_modified(False) 
                 QMessageBox.information(self, "成功", f"已成功打开 {len(files)} 个TXT文件\n版本: {version}\n表数量: {len(self.data)}")
             else:
@@ -1842,7 +1844,6 @@ class GXTEditorApp(QMainWindow):
         # 2. 根据是否存在冲突，决定是否询问
         should_overwrite = False
         if conflicts:
-            # 修复点：手动创建QMessageBox以确保按钮汉化
             msg_box = QMessageBox(QMessageBox.Icon.Question, "确认覆盖",
                                   f"发现 {len(conflicts)} 个重复的键值对。是否要全部覆盖？",
                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
