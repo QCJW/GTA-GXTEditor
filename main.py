@@ -18,16 +18,54 @@ from PySide6.QtWidgets import (
     QFileDialog, QLineEdit, QMessageBox, QVBoxLayout, QWidget, QMenuBar, QMenu,
     QStatusBar, QPushButton, QHBoxLayout, QLabel, QInputDialog, QTextEdit, QDialog,
     QDialogButtonBox, QAbstractItemView, QHeaderView, QCheckBox, QComboBox, QFontDialog,
-    QScrollArea, QSizePolicy, QGroupBox, QFrame
+    QScrollArea, QSizePolicy, QGroupBox, QFrame, QProgressDialog
 )
 
 # --- 导入核心逻辑 ---
+# 确保这些文件与 main.py 在同一目录下
 from gxt_parser import getVersion, getReader
 from IVGXT import generate_binary as write_iv, load_txt as load_iv_txt, process_special_chars, gta4_gxt_hash
 from VCGXT import VCGXT
 from SAGXT import SAGXT
 from LCGXT import LCGXT
 from whm_table import parse_whm_table, dump_whm_table
+
+# ========== Helper functions for validation (add these at the module level) ==========
+
+def _get_key_validation_message(version, file_type='gxt'):
+    """Gets the validation error message for a given version."""
+    if file_type == 'dat': return "DAT文件键名必须是0x或0X开头的8位十六进制数 (例如: 0x12345678)"
+    if version == 'VC': return "VC键名必须是1-7位数字、大写字母或下划线"
+    if version == 'SA': return "SA键名必须是1-8位十六进制数"
+    if version == 'III': return "III键名必须是1-7位数字、字母或下划线"
+    if version == 'IV': return "IV键名必须是字母数字下划线组成的明文，或是0x/0X开头的8位十六进制数"
+    return "键名格式不正确"
+
+def _validate_key_static(key, version, file_type='gxt'):
+    """Statically validates a key without creating a widget instance."""
+    if file_type == 'dat':
+        return re.fullmatch(r'0[xX][0-9a-fA-F]{8}', key) is not None
+    
+    if version == 'VC':
+        return re.fullmatch(r'[0-9A-Z_]{1,7}', key) is not None
+    elif version == 'SA':
+        return re.fullmatch(r'[0-9a-fA-F]{1,8}', key) is not None
+    elif version == 'III':
+        return re.fullmatch(r'[0-9a-zA-Z_]{1,7}', key) is not None
+    elif version == 'IV':
+        if key.lower().startswith('0x'):
+            return re.fullmatch(r'0[xX][0-9a-fA-F]{8}', key) is not None
+        else:
+            return re.fullmatch(r'[A-Za-z0-9_]+', key) is not None
+    return True
+
+def _validate_key_for_import_optimized(key, version):
+    """Optimized validation function for TXT import, returning a boolean and a message."""
+    if _validate_key_static(key, version, 'gxt'):
+        return True, ""
+    else:
+        return False, _get_key_validation_message(version, 'gxt')
+
 
 # ========== 字体生成器及相关组件 ==========
 
@@ -780,30 +818,11 @@ class EditKeyDialog(QDialog):
 
     def validate_key(self, key):
         """验证键名是否符合当前版本的规则 (使用 re.fullmatch)"""
-        if self.file_type == 'dat':
-            return re.fullmatch(r'0[xX][0-9a-fA-F]{8}', key) is not None
-        
-        if self.version == 'VC':
-            return re.fullmatch(r'[0-9A-Z_]{1,7}', key) is not None
-        elif self.version == 'SA':
-            return re.fullmatch(r'[0-9a-fA-F]{1,8}', key) is not None
-        elif self.version == 'III':
-            return re.fullmatch(r'[0-9a-zA-Z_]{1,7}', key) is not None
-        elif self.version == 'IV':
-            if key.lower().startswith('0x'):
-                return re.fullmatch(r'0[xX][0-9a-fA-F]{8}', key) is not None
-            else:
-                return re.fullmatch(r'[A-Za-z0-9_]+', key) is not None
-        return True
+        return _validate_key_static(key, self.version, self.file_type)
 
     def get_validation_error_message(self):
         """获取当前版本键名的验证错误信息"""
-        if self.file_type == 'dat': return "DAT文件键名必须是0x或0X开头的8位十六进制数 (例如: 0x12345678)"
-        if self.version == 'VC': return "VC键名必须是1-7位数字、大写字母或下划线"
-        if self.version == 'SA': return "SA键名必须是1-8位十六进制数"
-        if self.version == 'III': return "III键名必须是1-7位数字、字母或下划线"
-        if self.version == 'IV': return "IV键名必须是字母数字下划线组成的明文，或是0x/0X开头的8位十六进制数"
-        return "键名格式不正确"
+        return _get_key_validation_message(self.version, self.file_type)
 
     def accept(self):
         if self.is_batch_add_mode or self.is_batch_edit_mode:
@@ -1398,10 +1417,11 @@ class GXTEditorApp(QMainWindow):
         return True
     
     def _validate_key_for_import(self, key, version):
-        """用于导入时验证键名的辅助函数，不依赖对话框实例"""
-        dialog_helper = EditKeyDialog(version=version)
-        is_valid = dialog_helper.validate_key(key)
-        message = dialog_helper.get_validation_error_message()
+        """
+        用于导入时验证键名的辅助函数。
+        此方法现在是新版静态优化函数的包装器，以保持向后兼容性。
+        """
+        is_valid, message = _validate_key_for_import_optimized(key, version)
         return is_valid, message
 
     def get_table_validation_error_message(self):
@@ -1749,46 +1769,81 @@ class GXTEditorApp(QMainWindow):
         if not files:
             return
 
+        # --- Progress Dialog Setup ---
+        progress = QProgressDialog("正在准备导入...", "取消", 0, len(files), self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setWindowTitle("正在导入TXT文件")
+        progress.show()
+
         try:
             temp_data = {}
-            # 步骤 1: 解析所有文件并验证键名
-            if version == 'IV':
-                all_invalid_keys = []
-                for file_path in files:
-                    parsed_data, invalid_keys, _ = load_iv_txt(Path(file_path), validate_callback=self._validate_key_for_import)
+            all_invalid_keys = []
+            
+            # --- Main Processing Loop ---
+            for i, file_path in enumerate(files):
+                QApplication.processEvents() # Keep UI responsive
+                if progress.wasCanceled():
+                    break
+                
+                progress.setValue(i)
+                progress.setLabelText(f"正在处理: {os.path.basename(file_path)}")
+
+                if version == 'IV':
+                    # For IV, use the specific loader that handles hash strings
+                    parsed_data, invalid_keys, _ = load_iv_txt(Path(file_path), validate_callback=_validate_key_for_import_optimized)
                     if invalid_keys:
                         for key, line_num, msg in invalid_keys:
-                             all_invalid_keys.append((key, line_num, file_path, msg))
-                        continue
+                            all_invalid_keys.append((key, line_num, file_path, msg))
+                        continue # Skip merging this file if it has errors
 
                     for table_name, entries in parsed_data.items():
                         if table_name not in temp_data:
                             temp_data[table_name] = {}
                         for entry in entries:
                             temp_data[table_name][entry['hash_string']] = entry['translated']
-                
-                if all_invalid_keys:
-                    error_msg = f"在导入的TXT文件中发现 {len(all_invalid_keys)} 个无效键名:\n"
-                    for key, line_num, file_path, msg in all_invalid_keys[:10]:
-                        error_msg += f"- 文件 '{os.path.basename(file_path)}', 第 {line_num} 行, 键 '{key}': {msg}\n"
-                    if len(all_invalid_keys) > 10:
-                        error_msg += f"...等 {len(all_invalid_keys) - 10} 个其他错误。"
-                    QMessageBox.critical(self, "导入错误", error_msg)
-                    return
+                else:
+                    # For other versions, use the standard loader
+                    reader = getReader(version)
+                    parsed_data, invalid_keys = self._load_standard_txt([file_path], reader.hasTables(), version)
+                    if invalid_keys:
+                        all_invalid_keys.extend(invalid_keys)
+                        continue # Skip merging this file if it has errors
+                    
+                    for table_name, table_content in parsed_data.items():
+                        if table_name not in temp_data:
+                            temp_data[table_name] = {}
+                        temp_data[table_name].update(table_content)
 
-            else:
-                reader = getReader(version)
-                temp_data, invalid_keys = self._load_standard_txt(files, reader.hasTables(), version)
-                if invalid_keys:
-                    error_msg = "在导入的TXT文件中发现无效键名:\n"
-                    for key, line_num, file_path, msg in invalid_keys[:10]:
-                        error_msg += f"- 文件 '{os.path.basename(file_path)}', 第 {line_num} 行, 键 '{key}': {msg}\n"
-                    if len(invalid_keys) > 10:
-                        error_msg += f"...等 {len(invalid_keys) - 10} 个其他错误。"
-                    QMessageBox.critical(self, "导入错误", error_msg)
-                    return
-            
-            # 步骤 2: 如果是全新加载, 直接设置数据
+            progress.setValue(len(files)) # Complete the bar
+
+            # --- Post-Processing ---
+            if progress.wasCanceled():
+                self.update_status("导入操作已取消。")
+                return
+
+            if all_invalid_keys:
+                error_msg_header = f"在导入的TXT文件中发现 {len(all_invalid_keys)} 个无效键名:\n\n"
+                error_details = []
+                for key, line_num, file_path, msg in all_invalid_keys[:100]: # Limit to 100 to avoid huge dialogs
+                    error_details.append(f"- 文件 '{os.path.basename(file_path)}', 行 {line_num}, 键 '{key}': {msg}")
+                
+                if len(all_invalid_keys) > 100:
+                    error_details.append(f"\n...等 {len(all_invalid_keys) - 100} 个其他错误。")
+
+                # Use a QTextEdit in a custom dialog for scrollable error messages
+                error_dialog = QDialog(self)
+                error_dialog.setWindowTitle("导入错误")
+                layout = QVBoxLayout(error_dialog)
+                text_edit = QTextEdit()
+                text_edit.setReadOnly(True)
+                text_edit.setText(error_msg_header + "\n".join(error_details))
+                layout.addWidget(text_edit)
+                buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+                buttons.accepted.connect(error_dialog.accept)
+                layout.addWidget(buttons)
+                error_dialog.exec()
+                return
+
             if not is_merge_mode:
                 self.data = temp_data
                 self.version = version
@@ -1797,19 +1852,19 @@ class GXTEditorApp(QMainWindow):
                 self.set_modified(False) 
                 QMessageBox.information(self, "成功", f"已成功打开 {len(files)} 个TXT文件\n版本: {version}\n表数量: {len(self.data)}")
             else:
-                # 步骤 3: 【优化】合并数据并一次性提示覆盖
                 self._merge_data_with_optimized_prompt(temp_data)
 
-            # 最后的UI更新
+            # Final UI update
             self.table_search.clear()
             self.filter_tables()
             if self.table_list.count() > 0:
                 self.table_list.setCurrentRow(0)
-            self.update_status(f"已处理 {len(files)} 个TXT文件 (版本: {version})")
+            self.update_status(f"已成功处理 {len(files)} 个TXT文件 (版本: {version})")
             self._update_ui_for_file_type()
 
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"打开或合并文件失败: {e}")
+            progress.close()
+            QMessageBox.critical(self, "错误", f"打开或合并文件时发生意外错误: {e}")
 
     def _merge_data_with_optimized_prompt(self, temp_data):
         """优化的合并逻辑：先检查所有冲突，再进行一次性询问"""
@@ -2051,6 +2106,7 @@ class GXTEditorApp(QMainWindow):
             QMessageBox.critical(self, "错误", f"导出失败: {str(e)}")
 
     def _load_standard_txt(self, files, has_tables, version):
+        # This method now uses the optimized validator
         data = {}
         invalid_keys = []
         current_table = "MAIN" if not has_tables else None
@@ -2070,7 +2126,7 @@ class GXTEditorApp(QMainWindow):
                         key, value = line.split('=', 1)
                         key = key.strip()
                         
-                        is_valid, msg = self._validate_key_for_import(key, version)
+                        is_valid, msg = _validate_key_for_import_optimized(key, version)
                         if not is_valid:
                             invalid_keys.append((key, line_num, file_path, msg))
                             continue
