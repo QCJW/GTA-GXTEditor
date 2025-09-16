@@ -1830,17 +1830,44 @@ class GXTEditorApp(QMainWindow):
                 if len(all_invalid_keys) > 100:
                     error_details.append(f"\n...等 {len(all_invalid_keys) - 100} 个其他错误。")
 
-                # Use a QTextEdit in a custom dialog for scrollable error messages
+                # --- Dynamic Dialog Sizing Logic ---
+                font = QFont("Consolas", 10)
+                font_metrics = QFontMetrics(font)
+                all_lines = error_msg_header.split('\n') + error_details
+                
+                # Calculate the required width based on the longest line
+                max_pixel_width = 0
+                for line in all_lines:
+                    max_pixel_width = max(max_pixel_width, font_metrics.horizontalAdvance(line))
+
+                # Define constraints for the dialog size
+                PADDING = 80  # For margins, scrollbar, etc.
+                MIN_WIDTH = 500
+                DEFAULT_HEIGHT = 450
+                screen_width = QGuiApplication.primaryScreen().availableGeometry().width()
+                MAX_WIDTH = int(screen_width * 0.85)
+                
+                # Clamp the calculated width between min and max
+                target_width = max_pixel_width + PADDING
+                final_width = min(MAX_WIDTH, max(MIN_WIDTH, target_width))
+
+                # --- Create and show the error dialog ---
                 error_dialog = QDialog(self)
                 error_dialog.setWindowTitle("导入错误")
+                error_dialog.resize(final_width, DEFAULT_HEIGHT)
+                
                 layout = QVBoxLayout(error_dialog)
                 text_edit = QTextEdit()
                 text_edit.setReadOnly(True)
+                text_edit.setFont(font)
+                text_edit.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
                 text_edit.setText(error_msg_header + "\n".join(error_details))
                 layout.addWidget(text_edit)
+                
                 buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
                 buttons.accepted.connect(error_dialog.accept)
                 layout.addWidget(buttons)
+                
                 error_dialog.exec()
                 return
 
@@ -2298,34 +2325,48 @@ class GXTEditorApp(QMainWindow):
         else:
             event.accept()
 
-
 # ========== 入口 ==========
 if __name__ == "__main__":
     import sys
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
 
-    # 新增：加载Qt中文翻译，实现标准对话框的汉化
+    # --- 加载翻译 ---
     translator = QTranslator()
-    # 获取PySide6自带的翻译文件路径
-    translations_path = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
-    qt_zh_cn_path = os.path.join(translations_path, 'qt_zh_CN.qm')
-    
-    if os.path.exists(qt_zh_cn_path):
-        if translator.load(qt_zh_cn_path):
-            app.installTranslator(translator)
-            print("成功加载Qt中文语言包。")
-        else:
-            print("加载Qt中文语言包失败。")
+
+    if getattr(sys, 'frozen', False):
+        # 打包状态下 (exe 运行时)
+        base_dir = Path(sys._MEIPASS)
+        custom_trans_path = base_dir / "translations" / "zh_CN.qm"
+        qt_trans_path = base_dir / "translations" / "qt_zh_CN.qm"
     else:
-        print(f"未找到Qt中文语言包: {qt_zh_cn_path}")
+        # 开发状态
+        base_dir = Path(__file__).parent
+        custom_trans_path = base_dir / "translations" / "zh_CN.qm"
+        translations_path = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+        qt_trans_path = Path(translations_path) / "qt_zh_CN.qm"
 
+    loaded = False
+    # 优先加载自定义翻译
+    if custom_trans_path.exists() and translator.load(str(custom_trans_path)):
+        app.installTranslator(translator)
+        print("✅ 已加载自定义翻译:", custom_trans_path)
+        loaded = True
+    # 其次加载 Qt 自带翻译
+    elif qt_trans_path.exists() and translator.load(str(qt_trans_path)):
+        app.installTranslator(translator)
+        print("✅ 已加载 Qt 自带中文语言包:", qt_trans_path)
+        loaded = True
 
+    if not loaded:
+        print("⚠️ 未找到任何翻译文件")
+
+    # --- 程序启动 ---
     file_to_open = None
     if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
         file_lower = sys.argv[1].lower()
         if file_lower.endswith('.gxt') or os.path.basename(file_lower) == 'whm_table.dat':
-             file_to_open = sys.argv[1]
+            file_to_open = sys.argv[1]
 
     editor = GXTEditorApp(file_to_open)
     editor.show()
