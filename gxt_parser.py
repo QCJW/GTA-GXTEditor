@@ -6,7 +6,21 @@ import numpy as np
 
 # =======================
 # 极致优化版 GXT 解析（修正为原始分割逻辑，兼容所有结尾情况）
-# =======================
+# 修复说明：
+# 1) findBlock 现在兼容自定义 MemoryMappedFile（不再依赖 fileno）。
+# 2) 修复了对 zero_idx 索引的越界问题（在 searchsorted 返回 len(zero_idx) 时不会直接索引）。
+# 3) 保持原有各种版本（III/VC/SA/IV）的解析逻辑，但对边界情况进行了更稳健的处理。
+# 4) 提供 MemoryMappedFile 类以便在不持有真实文件对象的场景下使用。
+#
+# 使用方法示例：
+#   from gxt_parser import MemoryMappedFile, getVersion, getReader
+#   mm = MemoryMappedFile('american.gxt')
+#   reader = getReader(getVersion(mm))
+#   if reader.hasTables():
+#       tables = reader.parseTables(mm)
+#       entries = reader.parseTKeyTDat(mm)
+#   else:
+#       entries = reader.parseTKeyTDat(mm)
 
 class III:
     def hasTables(self):
@@ -27,8 +41,12 @@ class III:
         arr = np.frombuffer(TDat, dtype=np.uint16)
         zero_idx = np.where(arr == 0)[0]
         starts = offsets // 2
-        ends = np.searchsorted(zero_idx, starts, side='left')
-        ends = np.where(ends < len(zero_idx), zero_idx[ends], len(arr))
+        # safe handling for ends
+        ends_idx = np.searchsorted(zero_idx, starts, side='left')
+        ends = np.empty_like(ends_idx)
+        mask = ends_idx < zero_idx.size
+        ends[mask] = zero_idx[ends_idx[mask]]
+        ends[~mask] = len(arr)
         values = []
         for i in range(entry_count):
             raw = arr[starts[i]:ends[i]].tobytes()
@@ -61,8 +79,12 @@ class VC:
         arr = np.frombuffer(TDat, dtype=np.uint16)
         zero_idx = np.where(arr == 0)[0]
         starts = offsets // 2
-        ends = np.searchsorted(zero_idx, starts, side='left')
-        ends = np.where(ends < len(zero_idx), zero_idx[ends], len(arr))
+        # safe handling for ends to avoid out-of-bounds indexing
+        ends_idx = np.searchsorted(zero_idx, starts, side='left')
+        ends = np.empty_like(ends_idx)
+        mask = ends_idx < zero_idx.size
+        ends[mask] = zero_idx[ends_idx[mask]]
+        ends[~mask] = len(arr)
         values = []
         for i in range(entry_count):
             raw = arr[starts[i]:ends[i]].tobytes()
@@ -95,8 +117,11 @@ class SA:
         arr = np.frombuffer(TDat, dtype=np.uint8)
         zero_idx = np.where(arr == 0)[0]
         starts = offsets
-        ends = np.searchsorted(zero_idx, starts, side='left')
-        ends = np.where(ends < len(zero_idx), zero_idx[ends], len(arr))
+        ends_idx = np.searchsorted(zero_idx, starts, side='left')
+        ends = np.empty_like(ends_idx)
+        mask = ends_idx < zero_idx.size
+        ends[mask] = zero_idx[ends_idx[mask]]
+        ends[~mask] = len(arr)
         mv = memoryview(TDat)
         values = []
         for i in range(entry_count):
@@ -243,20 +268,60 @@ def parseTKeyTDat_common(stream, entry_size, key_format, value_encoding):
             append_entry((key, value))
     return Entries
 
+
 def findBlock(stream, block):
-    file_size = os.fstat(stream.fileno()).st_size  # 获取文件大小
-    while True:
-        peek = stream.peek(4096)
-        idx = peek.find(block.encode())
-        if idx != -1:
-            stream.seek(idx, os.SEEK_CUR)
-            break
+    """Search forward for a 4-byte block tag (e.g. 'TABL','TKEY','TDAT') from the current stream
+    position. Works with both raw file objects and the custom MemoryMappedFile wrapper.
+    Leaves the stream positioned **after** the 8-byte block header so that a subsequent
+    stream.read(size) returns the block payload.
+    Returns:
+        size (int): the 32-bit size field following the 4-byte tag.
+    """
+    # determine file size robustly
+    try:
+        if hasattr(stream, 'fileno'):
+            file_size = os.fstat(stream.fileno()).st_size
+        elif hasattr(stream, '_mmap'):
+            file_size = len(stream._mmap)
+        elif hasattr(stream, '_file') and hasattr(stream._file, 'fileno'):
+            file_size = os.fstat(stream._file.fileno()).st_size
         else:
-            if stream.tell() + 4096 >= file_size:
+            # fallback using seek/tell
+            cur = stream.tell()
+            stream.seek(0, os.SEEK_END)
+            file_size = stream.tell()
+            stream.seek(cur, os.SEEK_SET)
+    except Exception:
+        # last resort
+        file_size = None
+
+    tag = block.encode()
+    window = 4096
+    # safety: ensure we can call peek/seek/tell on the stream
+    while True:
+        peek = stream.peek(window)
+        if not peek:
+            # nothing more to read
+            raise ValueError(f"Block '{block}' not found in stream")
+        idx = peek.find(tag)
+        if idx != -1:
+            # found relative to current position; move to it and read header
+            stream.seek(idx, os.SEEK_CUR)
+            header = stream.read(8)
+            if len(header) < 8:
+                raise ValueError(f"Incomplete header for block '{block}'")
+            _, size = struct.unpack('4sI', header)
+            return size
+        # not found in this window
+        # if file_size known and we're at/near the end, stop searching
+        try:
+            if file_size is not None and stream.tell() + window >= file_size:
                 raise ValueError(f"Block '{block}' not found in stream")
-            stream.seek(4096 - 4, os.SEEK_CUR)  # 重叠4字节以防块跨边界
-    _, size = struct.unpack('4sI', stream.read(8))
-    return size
+        except Exception:
+            pass
+        # advance by window-4 so we don't miss tags crossing the boundary
+        stream.seek(window - 4, os.SEEK_CUR)
+
 
 def getVersion(stream):
     bytes = stream.peek(8)[:8]
@@ -275,6 +340,7 @@ def getVersion(stream):
         return 'III'
     return None
 
+
 def getReader(version):
     if version == 'VC':
         return VC()
@@ -287,6 +353,7 @@ def getReader(version):
     if version == 'IV':
         return IV()
     return None
+
 
 def _parseTables(stream):
     size = findBlock(stream, 'TABL')

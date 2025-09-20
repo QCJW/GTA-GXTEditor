@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 
 # --- 导入核心逻辑 ---
 # 确保这些文件与 main.py 在同一目录下
-from gxt_parser import getVersion, getReader
+from gxt_parser import getVersion, getReader, MemoryMappedFile
 from IVGXT import generate_binary as write_iv, load_txt as load_iv_txt, process_special_chars, gta4_gxt_hash
 from VCGXT import VCGXT
 from SAGXT import SAGXT
@@ -1696,35 +1696,44 @@ class GXTEditorApp(QMainWindow):
         self.open_file(path)
 
     def open_gxt(self, path=None):
+        mm = None
         try:
-            with open(path, "rb") as f:
-                version = getVersion(f)
-                reader = getReader(version)
-                f.seek(0)
-                self.data.clear()
-                if reader.hasTables():
-                    for name, offset in reader.parseTables(f):
-                        f.seek(offset)
-                        self.data[name] = dict(reader.parseTKeyTDat(f))
-                else:
-                    self.data["MAIN"] = dict(reader.parseTKeyTDat(f))
-                self.version = version
-                self.filepath = path
-                self.file_type = 'gxt'
-                self.table_search.clear()
-                self.filter_tables()
-                if self.table_list.count() > 0: self.table_list.setCurrentRow(0)
-                self.update_status(f"已打开GXT文件: {os.path.basename(path)}, 版本: {version}")
-                
-                version_map = {'IV': 'GTA4', 'VC': 'Vice City', 'SA': 'San Andreas', 'III': 'GTA3'}
-                display_version = version_map.get(version, version)
-                total_keys = sum(len(table) for table in self.data.values())
-                
-                QMessageBox.information(self, "成功", f"已成功打开GXT文件\n版本: {display_version}\n表数量: {len(self.data)}\n键值对总数: {total_keys}")
-                self._update_ui_for_file_type()
-                self.set_modified(False)
+            mm = MemoryMappedFile(path)
+            version = getVersion(mm)
+            if not version:
+                raise ValueError("无法识别的 GXT 文件版本。")
+
+            reader = getReader(version)
+            mm.seek(0)
+            self.data.clear()
+
+            if reader.hasTables():
+                for name, offset in reader.parseTables(mm):
+                    mm.seek(offset)
+                    self.data[name] = dict(reader.parseTKeyTDat(mm))
+            else:
+                self.data["MAIN"] = dict(reader.parseTKeyTDat(mm))
+
+            self.version = version
+            self.filepath = path
+            self.file_type = 'gxt'
+            self.table_search.clear()
+            self.filter_tables()
+            if self.table_list.count() > 0: self.table_list.setCurrentRow(0)
+            self.update_status(f"已打开GXT文件: {os.path.basename(path)}, 版本: {version}")
+            
+            version_map = {'IV': 'GTA4', 'VC': 'Vice City', 'SA': 'San Andreas', 'III': 'GTA3'}
+            display_version = version_map.get(version, version)
+            total_keys = sum(len(table) for table in self.data.values())
+            
+            QMessageBox.information(self, "成功", f"已成功打开GXT文件\n版本: {display_version}\n表数量: {len(self.data)}\n键值对总数: {total_keys}")
+            self._update_ui_for_file_type()
+            self.set_modified(False)
         except Exception as e:
             QMessageBox.critical(self, "错误", f"打开文件失败: {str(e)}")
+        finally:
+            if mm:
+                mm.close()
 
     def open_dat(self, path=None):
         try:
