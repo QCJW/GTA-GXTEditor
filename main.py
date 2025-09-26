@@ -1805,7 +1805,7 @@ class GXTEditorApp(QMainWindow):
                         if table_name not in temp_data:
                             temp_data[table_name] = {}
                         for entry in entries:
-                            temp_data[table_name][entry['hash_string']] = entry['translated']
+                            temp_data[table_name][entry['hash_string']] = entry['text']
                 else:
                     # For other versions, use the standard loader
                     reader = getReader(version)
@@ -2036,7 +2036,7 @@ class GXTEditorApp(QMainWindow):
                     m_Data[table_name] = []
                     for key_str, translated_text in entries_dict.items():
                         hash_str = f'0x{gta4_gxt_hash(key_str):08X}' if not key_str.lower().startswith('0x') else key_str
-                        m_Data[table_name].append({'hash_string': hash_str, 'original': '', 'translated': translated_text})
+                        m_Data[table_name].append({'hash_string': hash_str, 'text': translated_text})
                         if gen_extra: all_chars.update(c for c in translated_text if ord(c) > 255)
                 write_iv(m_Data, Path(os.path.basename(path)))
                 if gen_extra: process_special_chars(all_chars)
