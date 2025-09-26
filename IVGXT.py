@@ -6,7 +6,6 @@ from pathlib import Path
 # ---------- 配置 ----------
 INPUT_TXT = Path('GTA4.txt')
 OUTPUT_GXT = Path('chinese.gxt')
-PREFER_ORIGINAL_IF_NO_TRANSLATION = True
 
 # ---------- 文本格式 ----------
 TABLE_RE = re.compile(r'^\[([0-9a-zA-Z_]{1,7})\]\s*$')
@@ -44,7 +43,6 @@ def u8_to_u16_list(u8_string: str):
         return [0]
     utf16le = u8_string.encode('utf-16-le')
     u16 = list(struct.unpack('<' + 'H' * (len(utf16le) // 2), utf16le))
-    # Rockstar 风格：总是以 0 结尾
     if not u16 or u16[-1] != 0:
         u16.append(0)
     return u16
@@ -82,22 +80,19 @@ def load_txt(filepath: Path, special_chars=None, validate_callback=None):
                 m_Data[current_table] = []
             continue
 
-        is_original = False
-        if line.startswith(';'):
-            is_original = True
-            line = line[1:]
+        if raw_line.lstrip().startswith(';'):
+            continue
 
         m_entry = ENTRY_RE.match(line)
         if m_entry:
             key_left = m_entry.group(1).strip()
             b_string = m_entry.group(2)
 
-            # 使用回调函数验证键名格式
             if validate_callback:
                 is_valid, msg = validate_callback(key_left, 'IV')
                 if not is_valid:
                     invalid_keys.append((key_left, line_no, msg))
-                    continue # 跳过此无效键
+                    continue
 
             if current_table is None:
                 warn(f"{filepath}: 第 {line_no} 行条目没有所属表; 将分配到 'MAIN'")
@@ -115,20 +110,10 @@ def load_txt(filepath: Path, special_chars=None, validate_callback=None):
                 h = gta4_gxt_hash(key_left)
                 hash_str = f'0x{h:08X}'
 
-            # 确保列表存在
             if current_table not in m_Data:
                 m_Data[current_table] = []
 
-            if not m_Data[current_table] or m_Data[current_table][-1]['hash_string'] != hash_str:
-                m_Data[current_table].append({'hash_string': hash_str, 'original': '', 'translated': ''})
-
-            p_entry = m_Data[current_table][-1]
-            if is_original:
-                p_entry['original'] = b_string
-            else:
-                p_entry['translated'] = b_string
-                if (b_string.count('~') % 2) == 1:
-                    warn(f"{filepath}: 第 {line_no} 行 '~' 符号数量异常")
+            m_Data[current_table].append({'hash_string': hash_str, 'text': b_string})
         else:
             warn(f"{filepath}: 第 {line_no} 行无法识别。")
 
@@ -163,7 +148,7 @@ def generate_binary(m_Data, output_path: Path):
             datas = []
 
             for entry in entries:
-                hash_str = entry.get('hash_string', '') or entry.get('original', '')
+                hash_str = entry.get('hash_string', '')
                 try:
                     h_val = int(hash_str, 16) if isinstance(hash_str, str) and hash_str.lower().startswith('0x') else int(hash_str)
                 except Exception:
@@ -173,7 +158,7 @@ def generate_binary(m_Data, output_path: Path):
                 offset_bytes = len(datas) * 2
                 key_entries.append((offset_bytes, h_val))
 
-                text_to_write = entry.get('translated') or (entry.get('original') if PREFER_ORIGINAL_IF_NO_TRANSLATION else '') or ''
+                text_to_write = entry.get('text', '')
                 w_u16 = u8_to_u16_list(text_to_write)
                 datas.extend(w_u16)
 
@@ -183,7 +168,7 @@ def generate_binary(m_Data, output_path: Path):
                 f.write(name_to_8_bytes(table_name))
                 f.write(b'TKEY')
 
-            key_block_size = len(key_entries) * struct.calcsize('<II')  # 偏移(uint32) + 哈希(uint32)
+            key_block_size = len(key_entries) * struct.calcsize('<II')
             f.write(struct.pack('<I', key_block_size))
 
             for off_b, hash_v in key_entries:
@@ -196,7 +181,6 @@ def generate_binary(m_Data, output_path: Path):
             if datas:
                 f.write(struct.pack('<' + 'H' * len(datas), *datas))
 
-            # Rockstar 文件一般 4 字节对齐
             pad_len = (4 - (f.tell() % 4)) % 4
             if pad_len:
                 f.write(b'\x00' * pad_len)
