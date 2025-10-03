@@ -5,7 +5,7 @@ import re
 import json
 from pathlib import Path
 from PySide6.QtGui import QIcon
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict, Counter
 from functools import cmp_to_key
 
 from PySide6.QtCore import Qt, QTimer, QRect, Signal, QPoint, QPointF, QTranslator, QLibraryInfo
@@ -1203,19 +1203,16 @@ class GXTEditorApp(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(5, 5, 5, 5)
         
-        # 搜索框
         self.table_search = QLineEdit()
         self.table_search.setPlaceholderText("🔍 搜索表名...")
         self.table_search.textChanged.connect(self.filter_tables)
         left_layout.addWidget(self.table_search)
         
-        # 表列表
         self.table_list = QListWidget()
         self.table_list.itemSelectionChanged.connect(self.select_table)
         self.table_list.itemDoubleClicked.connect(self.rename_table)
         left_layout.addWidget(self.table_list, 1)
         
-        # 按钮布局
         btn_layout = QHBoxLayout()
         self.btn_add_table = QPushButton("➕")
         self.btn_add_table.setToolTip("添加表")
@@ -1236,17 +1233,21 @@ class GXTEditorApp(QMainWindow):
         
         self.tables_dock.setWidget(left)
         
-        # 中央区域
         central = QWidget()
         c_layout = QVBoxLayout(central)
         
-        # 搜索框
+        search_layout = QHBoxLayout()
         self.key_search = QLineEdit()
         self.key_search.setPlaceholderText("🔍 搜索键或值...")
         self.key_search.textChanged.connect(self.search_key_value)
-        c_layout.addWidget(self.key_search)
         
-        # 表格
+        self.global_search_checkbox = QCheckBox("全局搜索")
+        self.global_search_checkbox.stateChanged.connect(self._on_search_mode_changed)
+
+        search_layout.addWidget(self.key_search, 1)
+        search_layout.addWidget(self.global_search_checkbox)
+        c_layout.addLayout(search_layout)
+        
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["序号", "键名 (Key)", "值 (Value)"])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -1254,47 +1255,67 @@ class GXTEditorApp(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.doubleClicked.connect(self.on_table_double_click)
         self.table.verticalHeader().setVisible(False)
+        
+        # <--- 修改: 动态计算并固定序号列宽度以容纳6位数字
+        fm = self.table.fontMetrics()
+        six_digit_width = fm.horizontalAdvance("999999") + 20
+        self.table.setColumnWidth(0, six_digit_width)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(0, 50)
+        
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         
-        # 设置右键菜单
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_context_menu)
         
         c_layout.addWidget(self.table)
         
-        # 底部按钮栏
         key_btns = QHBoxLayout()
         key_btns.setContentsMargins(0, 5, 0, 0)
         btn_kadd = QPushButton("➕ 添加键")
-        
         btn_kadd.clicked.connect(self.add_key)
-        
         key_btns.addWidget(btn_kadd)
         key_btns.addStretch()
         c_layout.addLayout(key_btns)
         
         self.setCentralWidget(central)
-
+        
+    def _on_search_mode_changed(self):
+        is_global = self.global_search_checkbox.isChecked()
+        if is_global:
+            self.table_list.clearSelection()
+            self.current_table = None
+            self.update_status("全局搜索模式已开启")
+        else:
+            self.select_table() 
+            self.update_status("本地搜索模式")
+        self.search_key_value()
+        
     def show_context_menu(self, position):
         """显示右键菜单"""
-        if not self.current_table:
+        is_global_search = self.global_search_checkbox.isChecked()
+        if not self.current_table and not is_global_search:
             return
 
-        menu = QMenu()
         selected_rows = self.table.selectionModel().selectedRows()
         count = len(selected_rows)
-
         if count == 0:
             return
 
+        # <--- 修改: 在全局模式下，如果右键点击的是标题行，则不显示菜单
+        if is_global_search:
+            first_row_index = selected_rows[0].row()
+            # 如果选择的所有行都是标题行，或者选择中包含标题行，则不显示菜单
+            is_header_selection = all(self.table.columnSpan(idx.row(), 0) > 1 for idx in selected_rows)
+            if is_header_selection:
+                return
+
+        menu = QMenu()
         if count == 1:
             edit_action = QAction("✏️ 编辑", self)
             edit_action.triggered.connect(self.edit_selected_items)
             menu.addAction(edit_action)
-        elif count > 1:
+        elif count > 1: 
             edit_action = QAction("✏️ 批量编辑", self)
             edit_action.triggered.connect(self.edit_selected_items)
             menu.addAction(edit_action)
@@ -1342,30 +1363,62 @@ class GXTEditorApp(QMainWindow):
     def filter_tables(self):
         keyword = self.table_search.text().lower()
         self.table_list.clear()
-        for name in sorted(self.data):
-            if keyword in name.lower(): self.table_list.addItem(name)
+
+        other_tables = sorted([name for name in self.data if name != 'MAIN'])
+        all_table_names = []
+        if 'MAIN' in self.data:
+            all_table_names.append('MAIN')
+        all_table_names.extend(other_tables)
+
+        for name in all_table_names:
+            if keyword in name.lower():
+                self.table_list.addItem(name)
+        
         self.update_status(f"显示 {self.table_list.count()} 个表")
 
     def select_table(self):
         items = self.table_list.selectedItems()
-        if not items: return
-        self.current_table = items[0].text()
+        if not items:
+            if not self.global_search_checkbox.isChecked():
+                self.table.setRowCount(0)
+                self.current_table = None
+            return
+        
+        selected_table_name = items[0].text()
+
+        # <--- 修改: 更新跳转逻辑以匹配新的标题格式
+        if self.global_search_checkbox.isChecked():
+            header_text = f"以下是：{selected_table_name} 的键值对"
+            for row in range(self.table.rowCount()):
+                item = self.table.item(row, 0)
+                if item and self.table.columnSpan(row, 0) > 1 and item.text() == header_text:
+                    self.table.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtTop)
+                    return
+            return
+
+        # --- 以下是原有的本地模式逻辑 ---
+        self.current_table = selected_table_name
         self.refresh_keys()
         self.update_status(f"查看表: {self.current_table}，共 {len(self.data.get(self.current_table, {}))} 个键值对")
 
     def refresh_keys(self):
         """优化后的表格刷新方法"""
+        if self.global_search_checkbox.isChecked():
+            self.search_key_value()
+            return
+            
         self.table.setUpdatesEnabled(False)
         try:
+            self.table.setColumnCount(3)
+            self.table.setHorizontalHeaderLabels(["序号", "键名 (Key)", "值 (Value)"])
             self.table.setRowCount(0)
             if self.current_table and self.current_table in self.data:
-                items_to_display = sorted(self.data[self.current_table].items())
+                items_to_display = self.data[self.current_table].items()
                 self.table.setRowCount(len(items_to_display))
                 
                 for idx, (k, v) in enumerate(items_to_display):
                     display_value = v if len(v) <= self.value_display_limit else v[:self.value_display_limit] + "..."
                     
-                    # 使用 setItem 填充
                     idx_item = QTableWidgetItem(str(idx + 1))
                     idx_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     self.table.setItem(idx, 0, idx_item)
@@ -1377,34 +1430,88 @@ class GXTEditorApp(QMainWindow):
             self.table.setUpdatesEnabled(True)
 
     def search_key_value(self):
-        """优化后的搜索方法"""
         keyword = self.key_search.text().lower()
         self.table.setUpdatesEnabled(False)
         try:
             self.table.setRowCount(0)
-            if self.current_table and self.current_table in self.data:
-                # 1. 先在内存中筛选出所有匹配项
-                matching_items = []
-                for k, v in sorted(self.data[self.current_table].items()):
-                    if keyword in k.lower() or keyword in str(v).lower():
-                        matching_items.append((k, v))
+            self.table.setColumnCount(3)
+            self.table.setHorizontalHeaderLabels(["序号", "键名 (Key)", "值 (Value)"])
+            
+            if self.global_search_checkbox.isChecked():
+                grouped_results = defaultdict(list)
+                total_matches = 0
+                for table_name, entries in self.data.items():
+                    for original_idx, (k, v) in enumerate(entries.items()):
+                        if keyword in k.lower() or keyword in str(v).lower():
+                            grouped_results[table_name].append((original_idx, k, v))
+                            total_matches += 1
                 
-                # 2. 一次性设置行数
-                self.table.setRowCount(len(matching_items))
+                if not grouped_results:
+                    self.update_status("全局搜索结果: 0 个匹配项")
+                    self.table.setUpdatesEnabled(True)
+                    return
 
-                # 3. 循环填充
-                for idx, (k, v) in enumerate(matching_items):
-                    display_value = v if len(v) <= self.value_display_limit else v[:self.value_display_limit] + "..."
+                table_names = list(grouped_results.keys())
+                sorted_table_names = []
+                if 'MAIN' in table_names:
+                    sorted_table_names.append('MAIN')
+                    table_names.remove('MAIN')
+                sorted_table_names.extend(sorted(table_names))
+
+                total_rows = len(grouped_results) + total_matches
+                self.table.setRowCount(total_rows)
+
+                current_row = 0
+                header_font = QFont()
+                header_font.setBold(True)
+                header_bg = QColor(45, 45, 50)
+
+                for table_name in sorted_table_names:
+                    header_item = QTableWidgetItem(f"以下是：{table_name} 的键值对")
+                    header_item.setFont(header_font)
+                    header_item.setBackground(header_bg)
+                    header_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.table.setItem(current_row, 0, header_item)
+                    self.table.setSpan(current_row, 0, 1, 3)
+                    current_row += 1
+
+                    for original_idx, k, v in grouped_results[table_name]:
+                        display_value = v if len(v) <= self.value_display_limit else v[:self.value_display_limit] + "..."
+                        
+                        idx_item = QTableWidgetItem(str(original_idx + 1))
+                        idx_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        self.table.setItem(current_row, 0, idx_item)
+                        
+                        self.table.setItem(current_row, 1, QTableWidgetItem(k))
+                        
+                        value_item = QTableWidgetItem(display_value)
+                        value_item.setData(Qt.ItemDataRole.UserRole, v)
+                        self.table.setItem(current_row, 2, value_item)
+                        
+                        current_row += 1
+
+                self.table.resizeColumnToContents(1)
+                self.update_status(f"全局搜索结果: {total_matches} 个匹配项")
+            else:
+                if self.current_table and self.current_table in self.data:
+                    matching_items = []
+                    for original_idx, (k, v) in enumerate(self.data[self.current_table].items()):
+                        if keyword in k.lower() or keyword in str(v).lower():
+                            matching_items.append((original_idx, k, v))
                     
-                    idx_item = QTableWidgetItem(str(idx + 1))
-                    idx_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    self.table.setItem(idx, 0, idx_item)
-                    self.table.setItem(idx, 1, QTableWidgetItem(k))
-                    value_item = QTableWidgetItem(display_value)
-                    value_item.setData(Qt.ItemDataRole.UserRole, v)
-                    self.table.setItem(idx, 2, value_item)
-                
-                self.update_status(f"搜索结果: {len(matching_items)} 个匹配项")
+                    self.table.setRowCount(len(matching_items))
+                    for row_idx, (original_idx, k, v) in enumerate(matching_items):
+                        display_value = v if len(v) <= self.value_display_limit else v[:self.value_display_limit] + "..."
+                        
+                        idx_item = QTableWidgetItem(str(original_idx + 1))
+                        idx_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        self.table.setItem(row_idx, 0, idx_item)
+                        self.table.setItem(row_idx, 1, QTableWidgetItem(k))
+                        value_item = QTableWidgetItem(display_value)
+                        value_item.setData(Qt.ItemDataRole.UserRole, v)
+                        self.table.setItem(row_idx, 2, value_item)
+                    
+                    self.update_status(f"在表 '{self.current_table}' 中搜索到: {len(matching_items)} 个匹配项")
         finally:
             self.table.setUpdatesEnabled(True)
 
@@ -1453,6 +1560,10 @@ class GXTEditorApp(QMainWindow):
             self.data[name] = {}
             self.table_search.clear()
             self.filter_tables()
+            if self.global_search_checkbox.isChecked():
+                self.search_key_value()
+            if self.global_search_checkbox.isChecked():
+                self.search_key_value()
             items = self.table_list.findItems(name, Qt.MatchFlag.MatchExactly)
             if items: self.table_list.setCurrentItem(items[0])
             self.update_status(f"已添加新表: {name}")
@@ -1473,6 +1584,12 @@ class GXTEditorApp(QMainWindow):
             self.current_table = None
             self.refresh_keys()
             self.filter_tables()
+            if self.global_search_checkbox.isChecked():
+                self.search_key_value()
+            if self.global_search_checkbox.isChecked():
+                self.search_key_value()
+            if self.global_search_checkbox.isChecked():
+                self.search_key_value()
             self.update_status(f"已删除表: {old}")
             self.set_modified(True)
 
@@ -1494,6 +1611,10 @@ class GXTEditorApp(QMainWindow):
             self.data[new] = self.data.pop(old)
             self.current_table = new
             self.filter_tables()
+            if self.global_search_checkbox.isChecked():
+                self.search_key_value()
+            if self.global_search_checkbox.isChecked():
+                self.search_key_value()
             items = self.table_list.findItems(new, Qt.MatchFlag.MatchExactly)
             if items: self.table_list.setCurrentItem(items[0])
             self.update_status(f"已将表 '{old}' 重命名为 '{new}'")
@@ -1519,8 +1640,10 @@ class GXTEditorApp(QMainWindow):
         self.edit_selected_items()
 
     def edit_selected_items(self):
-        """处理单个或批量编辑的统一入口"""
-        if not self.current_table: return
+        is_global_search = self.global_search_checkbox.isChecked()
+        if not self.current_table and not is_global_search:
+            return
+            
         selected_rows = self.table.selectionModel().selectedRows()
         count = len(selected_rows)
         
@@ -1528,61 +1651,177 @@ class GXTEditorApp(QMainWindow):
 
         if count == 1:
             row = selected_rows[0].row()
-            key = self.table.item(row, 1).text()
-            original_value = self.data[self.current_table].get(key, "")
+            
+            # <--- 修改: 增加对标题行的判断，防止崩溃
+            if self.table.columnSpan(row, 0) > 1:
+                return # 如果是标题行，则不执行任何操作
+
+            if is_global_search:
+                table_name = ""
+                for i in range(row, -1, -1):
+                    if self.table.columnSpan(i, 0) > 1:
+                        # <--- 修改: 适配新的标题行格式
+                        text = self.table.item(i, 0).text()
+                        table_name = text.replace("以下是：", "").replace(" 的键值对", "")
+                        break
+                if not table_name: return
+
+                key = self.table.item(row, 1).text()
+            else:
+                table_name = self.current_table
+                key = self.table.item(row, 1).text()
+                
+            original_value = self.data[table_name].get(key, "")
             
             dlg = EditKeyDialog(self, title=f"编辑: {key}", key=key, value=original_value, version=self.version, file_type=self.file_type)
             if dlg.exec() == QDialog.DialogCode.Accepted:
                 new_key, new_val = dlg.get_data()
                 
-                if new_key != key and new_key in self.data[self.current_table]:
+                if new_key != key and new_key in self.data[table_name]:
                     QMessageBox.critical(self, "错误", f"键名 '{new_key}' 已存在！")
                     return
                 
                 if new_key != key:
-                    del self.data[self.current_table][key]
-                self.data[self.current_table][new_key] = new_val
+                    del self.data[table_name][key]
+                self.data[table_name][new_key] = new_val
                 
                 self.search_key_value()
                 self.update_status(f"已更新键: {new_key}")
                 self.set_modified(True)
-        else:
-            original_pairs = []
+        
+        elif True:  # 支持全局/本地模式的批量编辑（原来的 'elif not is_global_search' 被替换）
+        
+            original_entries = []  # 列表: (table_name, key, value)
+
             for idx in selected_rows:
-                key = self.table.item(idx.row(), 1).text()
-                value = self.data[self.current_table].get(key, "")
-                original_pairs.append((key, value))
-            
-            original_keys = [p[0] for p in original_pairs]
-            batch_text = "\n".join([f"{k}={v}" for k, v in original_pairs])
-            
+                row = idx.row()
+
+                # 跳过表头行（在全局模式下表头的 columnSpan 大于 1）
+                if self.table.columnSpan(row, 0) > 1:
+                    continue
+
+                # 确定该行所属的表名：全局模式需向上查找标题行，本地模式直接使用当前表名
+                table_name = None
+                if is_global_search:
+                    for i in range(row, -1, -1):
+                        if self.table.columnSpan(i, 0) > 1:
+                            text = self.table.item(i, 0).text()
+                            table_name = text.replace("以下是：", "").replace(" 的键值对", "")
+                            break
+                else:
+                    # 本地模式（非全局搜索），直接使用当前表
+                    table_name = self.current_table
+
+                if not table_name:
+                    continue
+
+                key_item = self.table.item(row, 1)
+
+                if not key_item:
+                    continue
+
+                key = key_item.text()
+
+                value = self.data.get(table_name, {}).get(key, "")
+
+                original_entries.append((table_name, key, value))
+
+            if not original_entries:
+        
+                return
+
+        
+            original_keys = [k for (_, k, _) in original_entries]
+        
+            batch_text = "\n".join([f"{k}={v}" for (_, k, v) in original_entries])
+        
             dlg_data = {'keys': original_keys, 'text': batch_text}
-            dlg = EditKeyDialog(self, title=f"批量编辑 {count} 个条目", version=self.version, file_type=self.file_type, 
+        
+            dlg = EditKeyDialog(self, title=f"批量编辑 {len(original_entries)} 个条目", version=self.version, file_type=self.file_type,
+        
                                 is_batch_edit=True, batch_edit_data=dlg_data)
 
+        
             if dlg.exec() == QDialog.DialogCode.Accepted:
-                new_pairs = dlg.get_data()
+                new_pairs = dlg.get_data()  # [(new_key, new_val), ...] 与 original_entries 顺序一致
 
-                all_keys_in_table = set(self.data[self.current_table].keys())
-                original_keys_set = set(original_keys)
-                other_keys_on_table = all_keys_in_table - original_keys_set
-                new_keys_from_dialog = {p[0] for p in new_pairs}
-                
-                conflicts = new_keys_from_dialog.intersection(other_keys_on_table)
+                # 基本校验：返回数据长度应与原始选中条目一致
+                if len(new_pairs) != len(original_entries):
+                    QMessageBox.critical(self, "错误", "批量编辑返回的数据与原始选择数不匹配。")
+                    return
+
+                # 按表名分组原始键
+                from collections import defaultdict, Counter
+
+                orig_keys_per_table = defaultdict(list)
+                for tbl, k, _ in original_entries:
+                    orig_keys_per_table[tbl].append(k)
+
+                # 计算每个表中不属于本次编辑的现有键（用于冲突检测）
+                other_keys_per_table = {t: set(self.data.get(t, {}).keys()) - set(orig_keys_per_table[t]) for t in orig_keys_per_table}
+
+                # 检查：同一表中是否有多个编辑条目被改成了相同的键（重复键）
+                new_keys_counter_per_table = defaultdict(Counter)
+                for (tbl, _, _), (new_k, _) in zip(original_entries, new_pairs):
+                    new_keys_counter_per_table[tbl][new_k] += 1
+
+                duplicate_new_keys = []
+                for t, counter in new_keys_counter_per_table.items():
+                    for k, cnt in counter.items():
+                        if cnt > 1:
+                            duplicate_new_keys.append(f"{t}:{k} (出现 {cnt} 次)")
+
+                if duplicate_new_keys:
+                    QMessageBox.critical(self, "重复键", f"在批量编辑中发现重复键名（同一表内）: {', '.join(duplicate_new_keys)}。\n请确保每个表中键名唯一。")
+                    return
+
+                # 构建 new_keys_per_table 用于检测与其他（未编辑）键冲突
+                new_keys_per_table = defaultdict(set)
+                for (tbl, _, _), (new_k, _) in zip(original_entries, new_pairs):
+                    new_keys_per_table[tbl].add(new_k)
+
+                # 检查与表中未编辑的键是否冲突
+                conflicts = []
+                for t in new_keys_per_table:
+                    conf = new_keys_per_table[t].intersection(other_keys_per_table.get(t, set()))
+                    if conf:
+                        conflicts.extend([f"{t}:{c}" for c in conf])
+
                 if conflicts:
                     QMessageBox.critical(self, "键名冲突", f"发现键名冲突: {', '.join(conflicts)}\n这些键已在表中存在且不属于当前编辑的条目。")
                     return
-                
-                for key in original_keys:
-                    del self.data[self.current_table][key]
-                for key, value in new_pairs:
-                    self.data[self.current_table][key] = value
-                
+
+                # 应用修改: 重建受影响的表以保留顺序
+                edits_by_table = defaultdict(dict)
+                for (tbl, old_k, _), (new_k, new_v) in zip(original_entries, new_pairs):
+                    edits_by_table[tbl][old_k] = (new_k, new_v)
+
+                for table_name, edits in edits_by_table.items():
+                    if table_name not in self.data: continue
+
+                    original_table_dict = self.data[table_name]
+                    new_table_dict = {}
+                    
+                    for old_key, old_value in original_table_dict.items():
+                        if old_key in edits:
+                            new_key, new_value = edits[old_key]
+                            new_table_dict[new_key] = new_value
+                        else:
+                            new_table_dict[old_key] = old_value
+                    
+                    self.data[table_name] = new_table_dict
+
                 self.search_key_value()
                 self.update_status(f"已批量更新 {len(new_pairs)} 个键值对")
                 self.set_modified(True)
 
+
+
     def add_key(self):
+        if self.global_search_checkbox.isChecked():
+            QMessageBox.information(self, "提示", "请先退出全局搜索模式，并选择一个表来添加键值对。")
+            return
+            
         if not self.current_table: 
             QMessageBox.information(self, "提示", "请先选择一个表")
             return
@@ -1627,30 +1866,76 @@ class GXTEditorApp(QMainWindow):
                 self.set_modified(True)
 
     def delete_key(self):
-        if not self.current_table: return
+        is_global_search = self.global_search_checkbox.isChecked()
+        if not self.current_table and not is_global_search: return
+        
         rows = self.table.selectionModel().selectedRows()
         if not rows: return
+        
         msg_box = QMessageBox(QMessageBox.Icon.Question, "确认", f"是否删除选中的 {len(rows)} 个键值对？", 
                              QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
         msg_box.button(QMessageBox.StandardButton.Yes).setText("是")
         msg_box.button(QMessageBox.StandardButton.No).setText("否")
+        
         if msg_box.exec() == QMessageBox.StandardButton.Yes:
-            keys_to_delete = {self.table.item(idx.row(), 1).text() for idx in rows}
-            for k in keys_to_delete:
-                self.data[self.current_table].pop(k, None)
+            deleted_count = 0
+            sorted_rows = sorted(rows, key=lambda idx: idx.row(), reverse=True)
+
+            for idx in sorted_rows:
+                row_index = idx.row()
+                if self.table.columnSpan(row_index, 0) > 1: continue # 跳过标题行
+
+                if is_global_search:
+                    table_name = ""
+                    for i in range(row_index, -1, -1):
+                        if self.table.columnSpan(i, 0) > 1:
+                            # <--- 修改: 适配新的标题行格式
+                            text = self.table.item(i, 0).text()
+                            table_name = text.replace("以下是：", "").replace(" 的键值对", "")
+                            break
+                    if not table_name: continue
+                    key_to_delete = self.table.item(row_index, 1).text()
+                else:
+                    table_name = self.current_table
+                    key_to_delete = self.table.item(row_index, 1).text()
+                
+                if table_name in self.data and key_to_delete in self.data[table_name]:
+                    del self.data[table_name][key_to_delete]
+                    deleted_count += 1
+
             self.search_key_value()
-            self.update_status(f"已删除 {len(keys_to_delete)} 个键值对")
-            self.set_modified(True)
+            self.update_status(f"已删除 {deleted_count} 个键值对")
+            if deleted_count > 0: self.set_modified(True)
 
     def copy_selected(self):
-        if not self.current_table: return
+        is_global_search = self.global_search_checkbox.isChecked()
+        if not self.current_table and not is_global_search: return
+
         rows = self.table.selectionModel().selectedRows()
         if not rows: return
+        
         pairs = []
         for idx in rows:
-            k = self.table.item(idx.row(), 1).text()
-            v = self.data[self.current_table].get(k, "")
+            row_index = idx.row()
+            if self.table.columnSpan(row_index, 0) > 1: continue # 跳过标题行
+
+            if is_global_search:
+                table_name = ""
+                for i in range(row_index, -1, -1):
+                    if self.table.columnSpan(i, 0) > 1:
+                        # <--- 修改: 适配新的标题行格式
+                        text = self.table.item(i, 0).text()
+                        table_name = text.replace("以下是：", "").replace(" 的键值对", "")
+                        break
+                if not table_name: continue
+                k = self.table.item(row_index, 1).text()
+            else:
+                table_name = self.current_table
+                k = self.table.item(row_index, 1).text()
+
+            v = self.data[table_name].get(k, "")
             pairs.append(f"{k}={v}")
+            
         if pairs:
             QGuiApplication.clipboard().setText("\n".join(pairs))
             self.update_status(f"已复制 {len(pairs)} 个键值对到剪贴板")
@@ -1667,6 +1952,10 @@ class GXTEditorApp(QMainWindow):
         if self.version == 'III': self.data["MAIN"] = {}
         self.table_search.clear()
         self.filter_tables()
+        if self.global_search_checkbox.isChecked():
+            self.search_key_value()
+        if self.global_search_checkbox.isChecked():
+            self.search_key_value()
         if self.table_list.count() > 0: self.table_list.setCurrentRow(0)
         self.update_status(f"已创建新GXT文件 (版本: {self.version})")
         self._update_ui_for_file_type()
@@ -1684,6 +1973,10 @@ class GXTEditorApp(QMainWindow):
         self.data[self.current_table] = {}
         self.table_search.clear()
         self.filter_tables()
+        if self.global_search_checkbox.isChecked():
+            self.search_key_value()
+        if self.global_search_checkbox.isChecked():
+            self.search_key_value()
         if self.table_list.count() > 0: self.table_list.setCurrentRow(0)
         self.update_status("已创建新WHM文件")
         self._update_ui_for_file_type()
@@ -1718,6 +2011,10 @@ class GXTEditorApp(QMainWindow):
                 self.file_type = 'gxt'
                 self.table_search.clear()
                 self.filter_tables()
+                if self.global_search_checkbox.isChecked():
+                    self.search_key_value()
+                if self.global_search_checkbox.isChecked():
+                    self.search_key_value()
                 if self.table_list.count() > 0: self.table_list.setCurrentRow(0)
                 self.update_status(f"已打开GXT文件: {os.path.basename(path)}, 版本: {version}")
                 
@@ -1747,6 +2044,10 @@ class GXTEditorApp(QMainWindow):
             self.file_type = 'dat'
             self.table_search.clear()
             self.filter_tables()
+            if self.global_search_checkbox.isChecked():
+                self.search_key_value()
+            if self.global_search_checkbox.isChecked():
+                self.search_key_value()
             if self.table_list.count() > 0: self.table_list.setCurrentRow(0)
             self.update_status(f"已打开DAT文件: {os.path.basename(path)}")
             QMessageBox.information(self, "成功", f"已成功打开 whm_table.dat 文件\n条目数量: {len(self.data[table_name])}")
@@ -1889,6 +2190,10 @@ class GXTEditorApp(QMainWindow):
             # Final UI update
             self.table_search.clear()
             self.filter_tables()
+            if self.global_search_checkbox.isChecked():
+                self.search_key_value()
+            if self.global_search_checkbox.isChecked():
+                self.search_key_value()
             if self.table_list.count() > 0:
                 self.table_list.setCurrentRow(0)
             self.update_status(f"已成功处理 {len(files)} 个TXT文件 (版本: {version})")
