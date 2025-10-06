@@ -619,36 +619,52 @@ class FontGeneratorDialog(QDialog):
                 QMessageBox.warning(self, "提示", "当前GXT中未找到符合条件的特殊字符。")
 
     def import_char_file(self):
-        """导入字符文件"""
+        """导入字符文件 (支持多种编码并自动排序)"""
         path, _ = QFileDialog.getOpenFileName(self, "导入字符文件", "", "文本文件 (*.txt);;所有文件 (*.*)")
         if not path: return
-        
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                # 移除换行和空格
-                chars = content.replace("\n", "").replace(" ", "")
-                # 去重
-                unique_chars = "".join(dict.fromkeys(chars))
-                self.characters = unique_chars
-                self.update_char_count()
-                QMessageBox.information(self, "导入成功", f"已导入 {len(unique_chars)} 个字符")
-        except Exception as e:
-            QMessageBox.critical(self, "导入失败", f"无法读取文件: {str(e)}")
+
+        # 尝试使用多种常见编码读取文件
+        encodings_to_try = ['utf-8-sig', 'utf-8', 'gbk', 'gb2312', 'utf-16', 'big5', 'latin-1']
+        content = None
+        detected_encoding = None
+
+        for encoding in encodings_to_try:
+            try:
+                with open(path, 'r', encoding=encoding) as f:
+                    content = f.read()
+                detected_encoding = encoding
+                break  # 成功读取后退出循环
+            except (UnicodeDecodeError, UnicodeError):
+                continue # 编码不匹配，尝试下一个
+            except Exception as e:
+                # 处理其他可能的错误，如权限问题
+                QMessageBox.critical(self, "读取失败", f"读取文件时发生意外错误: {str(e)}")
+                return
+
+        if content is not None:
+            # 移除换行和空格
+            chars = content.replace("\n", "").replace(" ", "")
+            # 去重并按Unicode排序
+            unique_sorted_chars = "".join(sorted(list(set(chars))))
+            self.characters = unique_sorted_chars
+            self.update_char_count()
+            QMessageBox.information(self, "导入成功", f"已导入 {len(unique_sorted_chars)} 个字符 (编码: {detected_encoding}, 已排序)")
+        else:
+            QMessageBox.critical(self, "导入失败", "无法识别的文件编码。\n请确保文件是常见的文本编码格式 (如 UTF-8, GBK, UTF-16 等)。")
 
     def input_chars_manually(self):
-        """手动输入字符"""
+        """手动输入字符 (自动排序)"""
         dlg = CharacterInputDialog(self, self.characters)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             text = dlg.text_edit.toPlainText()
             if text:
                 # 移除换行和空格
-                chars = text.replace("\n", "").replace(" ", "")
-                # 去重
-                unique_chars = "".join(dict.fromkeys(chars))
-                self.characters = unique_chars
+                chars_no_whitespace = text.replace("\n", "").replace(" ", "")
+                # 去重并按Unicode排序
+                unique_sorted_chars = "".join(sorted(list(set(chars_no_whitespace))))
+                self.characters = unique_sorted_chars
                 self.update_char_count()
-                QMessageBox.information(self, "成功", f"已设置 {len(unique_chars)} 个字符")
+                QMessageBox.information(self, "成功", f"已设置 {len(unique_sorted_chars)} 个字符 (已按Unicode排序)")
 
     def show_chars_list(self):
         """显示字符列表对话框"""
@@ -1132,16 +1148,44 @@ class GXTEditorApp(QMainWindow):
             QScrollBar:vertical {{
                 border: none;
                 background: {darker_bg.name()};
-                width: 12px;
-                margin: 0px;
+                width: 16px;
+                margin: 2px 0 2px 0;
             }}
             QScrollBar::handle:vertical {{
                 background: {button_bg.name()};
-                min-height: 20px;
-                border-radius: 4px;
+                min-height: 25px;
+                border-radius: 6px;
+                border: 1px solid {border_color.name()};
             }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+            QScrollBar::handle:vertical:hover {{
+                background: {QColor(button_bg).lighter(130).name()};
+            }}
+            QScrollBar::handle:vertical:pressed {{
+                background: {QColor(button_bg).darker(110).name()};
+            }}
+            QScrollBar:horizontal {{
+                border: none;
+                background: {darker_bg.name()};
+                height: 16px;
+                margin: 0 2px 0 2px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: {button_bg.name()};
+                min-width: 25px;
+                border-radius: 6px;
+                border: 1px solid {border_color.name()};
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background: {QColor(button_bg).lighter(130).name()};
+            }}
+            QScrollBar::handle:horizontal:pressed {{
+                background: {QColor(button_bg).darker(110).name()};
+            }}
+            QScrollBar::add-line, QScrollBar::sub-line {{
                 background: none;
+                border: none;
+                height: 0px;
+                width: 0px;
             }}
             QGroupBox {{
                 font-weight: bold;
