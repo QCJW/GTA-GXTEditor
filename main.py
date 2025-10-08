@@ -609,116 +609,129 @@ class FontGeneratorDialog(QDialog):
             label.setText("生成失败")
 
     def load_chars_from_parent(self):
+        """从父窗口（GXT编辑器）加载字符，使用对应版本的字符收集逻辑"""
         if self.gxt_editor and hasattr(self.gxt_editor, 'collect_and_filter_chars'):
+            # 获取当前版本信息
+            current_version = self.gxt_editor.version if hasattr(self.gxt_editor, 'version') else "IV"
+        
+            # 使用对应版本的字符收集逻辑
             chars = self.gxt_editor.collect_and_filter_chars()
             if chars:
                 self.characters = chars
                 self.update_char_count()
-                QMessageBox.information(self, "成功", f"已从当前GXT加载 {len(chars)} 个特殊字符。")
+            
+                # 更新版本选择以匹配GXT文件的版本
+                ver_map = {"IV": "GTA IV", "VC": "GTA Vice City", "SA": "GTA San Andreas", "III": "GTA III"}
+                if current_version in ver_map:
+                    self.version_combo.setCurrentText(ver_map[current_version])
+            
+                QMessageBox.information(self, "成功", 
+                                      f"已从当前GXT加载 {len(chars)} 个特殊字符。\n"
+                                      f"版本: {current_version}")
             else:
                 QMessageBox.warning(self, "提示", "当前GXT中未找到符合条件的特殊字符。")
 
     def import_char_file(self):
-        """导入字符文件 (支持多种编码并自动排序)"""
-        path, _ = QFileDialog.getOpenFileName(self, "导入字符文件", "", "文本文件 (*.txt);;所有文件 (*.*)")
-        if not path: return
+            """导入字符文件 (支持多种编码并自动排序)"""
+            path, _ = QFileDialog.getOpenFileName(self, "导入字符文件", "", "文本文件 (*.txt);;所有文件 (*.*)")
+            if not path: return
 
-        # 尝试使用多种常见编码读取文件
-        encodings_to_try = ['utf-8-sig', 'utf-8', 'gbk', 'gb2312', 'utf-16', 'big5', 'latin-1']
-        content = None
-        detected_encoding = None
+            # 尝试使用多种常见编码读取文件
+            encodings_to_try = ['utf-8-sig', 'utf-8', 'gbk', 'gb2312', 'utf-16', 'big5', 'latin-1']
+            content = None
+            detected_encoding = None
 
-        for encoding in encodings_to_try:
-            try:
-                with open(path, 'r', encoding=encoding) as f:
-                    content = f.read()
-                detected_encoding = encoding
-                break  # 成功读取后退出循环
-            except (UnicodeDecodeError, UnicodeError):
-                continue # 编码不匹配，尝试下一个
-            except Exception as e:
-                # 处理其他可能的错误，如权限问题
-                QMessageBox.critical(self, "读取失败", f"读取文件时发生意外错误: {str(e)}")
-                return
+            for encoding in encodings_to_try:
+                try:
+                    with open(path, 'r', encoding=encoding) as f:
+                        content = f.read()
+                    detected_encoding = encoding
+                    break  # 成功读取后退出循环
+                except (UnicodeDecodeError, UnicodeError):
+                    continue # 编码不匹配，尝试下一个
+                except Exception as e:
+                    # 处理其他可能的错误，如权限问题
+                    QMessageBox.critical(self, "读取失败", f"读取文件时发生意外错误: {str(e)}")
+                    return
 
-        if content is not None:
-            # 移除换行和空格
-            chars = content.replace("\n", "").replace(" ", "")
-            # 去重并按Unicode排序
-            unique_sorted_chars = "".join(sorted(list(set(chars))))
-            self.characters = unique_sorted_chars
-            self.update_char_count()
-            QMessageBox.information(self, "导入成功", f"已导入 {len(unique_sorted_chars)} 个字符 (编码: {detected_encoding}, 已排序)")
-        else:
-            QMessageBox.critical(self, "导入失败", "无法识别的文件编码。\n请确保文件是常见的文本编码格式 (如 UTF-8, GBK, UTF-16 等)。")
-
-    def input_chars_manually(self):
-        """手动输入字符 (自动排序)"""
-        dlg = CharacterInputDialog(self, self.characters)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            text = dlg.text_edit.toPlainText()
-            if text:
+            if content is not None:
                 # 移除换行和空格
-                chars_no_whitespace = text.replace("\n", "").replace(" ", "")
+                chars = content.replace("\n", "").replace(" ", "")
                 # 去重并按Unicode排序
-                unique_sorted_chars = "".join(sorted(list(set(chars_no_whitespace))))
+                unique_sorted_chars = "".join(sorted(list(set(chars))))
                 self.characters = unique_sorted_chars
                 self.update_char_count()
-                QMessageBox.information(self, "成功", f"已设置 {len(unique_sorted_chars)} 个字符 (已按Unicode排序)")
+                QMessageBox.information(self, "导入成功", f"已导入 {len(unique_sorted_chars)} 个字符 (编码: {detected_encoding}, 已排序)")
+            else:
+                QMessageBox.critical(self, "导入失败", "无法识别的文件编码。\n请确保文件是常见的文本编码格式 (如 UTF-8, GBK, UTF-16 等)。")
+
+    def input_chars_manually(self):
+            """手动输入字符 (自动排序)"""
+            dlg = CharacterInputDialog(self, self.characters)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                text = dlg.text_edit.toPlainText()
+                if text:
+                    # 移除换行和空格
+                    chars_no_whitespace = text.replace("\n", "").replace(" ", "")
+                    # 去重并按Unicode排序
+                    unique_sorted_chars = "".join(sorted(list(set(chars_no_whitespace))))
+                    self.characters = unique_sorted_chars
+                    self.update_char_count()
+                    QMessageBox.information(self, "成功", f"已设置 {len(unique_sorted_chars)} 个字符 (已按Unicode排序)")
 
     def show_chars_list(self):
-        """显示字符列表对话框"""
-        if not self.characters:
-            QMessageBox.information(self, "字符列表", "当前没有字符")
-            return
+            """显示字符列表对话框"""
+            if not self.characters:
+                QMessageBox.information(self, "字符列表", "当前没有字符")
+                return
             
-        dlg = QDialog(self)
-        dlg.setWindowTitle("字符列表")
-        dlg.setMinimumSize(520, 400)
+            dlg = QDialog(self)
+            dlg.setWindowTitle("字符列表")
+            dlg.setMinimumSize(520, 400)
         
-        layout = QVBoxLayout(dlg)
+            layout = QVBoxLayout(dlg)
         
-        text_edit = QTextEdit()
-        text_edit.setReadOnly(True)
+            text_edit = QTextEdit()
+            text_edit.setReadOnly(True)
         
-        font = QFont("Consolas", 12)
-        text_edit.setFont(font)
-        text_edit.setLineWrapMode(QTextEdit.LineWrapMode.FixedColumnWidth)
-        text_edit.setLineWrapColumnOrWidth(64)
-        text_edit.setPlainText(self.characters)
+            font = QFont("Consolas", 12)
+            text_edit.setFont(font)
+            text_edit.setLineWrapMode(QTextEdit.LineWrapMode.FixedColumnWidth)
+            text_edit.setLineWrapColumnOrWidth(64)
+            text_edit.setPlainText(self.characters)
         
-        layout.addWidget(text_edit)
+            layout.addWidget(text_edit)
         
-        char_count = len(self.characters)
-        unique_count = len(set(self.characters))
-        info_label = QLabel(f"字符总数: {char_count} | 唯一字符数: {unique_count}")
-        layout.addWidget(info_label)
+            char_count = len(self.characters)
+            unique_count = len(set(self.characters))
+            info_label = QLabel(f"字符总数: {char_count} | 唯一字符数: {unique_count}")
+            layout.addWidget(info_label)
         
-        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        btn_box.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
-        btn_box.rejected.connect(dlg.reject)
-        layout.addWidget(btn_box)
+            btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+            btn_box.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
+            btn_box.rejected.connect(dlg.reject)
+            layout.addWidget(btn_box)
         
-        dlg.exec()
+            dlg.exec()
 
     def update_char_count(self):
-        """更新字符数量显示"""
-        char_count = len(self.characters)
-        unique_count = len(set(self.characters))
-        self.char_count_label.setText(f"字符总数: {char_count} | 唯一字符数: {unique_count}")
+            """更新字符数量显示"""
+            char_count = len(self.characters)
+            unique_count = len(set(self.characters))
+            self.char_count_label.setText(f"字符总数: {char_count} | 唯一字符数: {unique_count}")
 
     def get_settings(self):
-        ver_map = {"GTA IV": "IV", "GTA San Andreas": "SA", "GTA Vice City": "VC", "GTA III": "III"}
-        version = ver_map.get(self.version_combo.currentText())
-        resolution = int(self.res_combo.currentText().split('x')[0])
+            ver_map = {"GTA IV": "IV", "GTA San Andreas": "SA", "GTA Vice City": "VC", "GTA III": "III"}
+            version = ver_map.get(self.version_combo.currentText())
+            resolution = int(self.res_combo.currentText().split('x')[0])
         
-        settings = {
-            "version": version,
-            "resolution": resolution,
-            "characters": self.characters,
-            "font_normal": self.font_normal_widget.get_font(),
-        }
-        return settings
+            settings = {
+                "version": version,
+                "resolution": resolution,
+                "characters": self.characters,
+                "font_normal": self.font_normal_widget.get_font(),
+            }
+            return settings
 
 class EditKeyDialog(QDialog):
     """编辑/新增 键值对对话框，支持多种模式"""
@@ -2519,22 +2532,61 @@ class GXTEditorApp(QMainWindow):
 
     # ====== 辅助与工具 ======
     def collect_and_filter_chars(self):
-        """根据指定逻辑收集和筛选GXT中的特殊字符"""
+        """根据当前版本对应的CHARACTERS.txt逻辑收集和筛选GXT中的特殊字符"""
         if not self.data:
             return ""
+    
+        # 根据当前版本使用不同的字符收集逻辑
+        if self.version == 'IV':
+            # IV版本逻辑：收集所有非ASCII字符（ord>255），排除特定字符
+            all_chars = {char for table in self.data.values() for value in table.values() for char in value}
+            special_chars = set()
+            for char in all_chars:
+                if ord(char) > 255:
+                    special_chars.add(char)
         
-        all_chars = {char for table in self.data.values() for value in table.values() for char in value}
+            # 排除特定字符
+            special_chars.discard(chr(0x2122))  # ™
+            special_chars.discard(chr(0x3000))  # 全角空格
+            special_chars.discard(chr(0xFEFF))  # 零宽无断空格
         
-        special_chars = set()
-        for char in all_chars:
-            if ord(char) > 255:
-                special_chars.add(char)
-        
-        special_chars.discard(chr(0x2122))
-        special_chars.discard(chr(0x3000))
-        special_chars.discard(chr(0xFEFF))
-        
-        return "".join(sorted(list(special_chars), key=lambda c: ord(c)))
+        elif self.version == 'VC':
+            # VC版本逻辑：收集所有UTF-16码点>0x7F的字符
+            all_chars = {char for table in self.data.values() for value in table.values() for char in value}
+            special_chars = set()
+            for char in all_chars:
+                code_point = ord(char)
+                if code_point > 0x7F:  # 收集所有非ASCII字符
+                    special_chars.add(char)
+                
+        elif self.version == 'SA':
+            # SA版本逻辑：收集所有非ASCII字符（ord>0x7F）
+            all_chars = {char for table in self.data.values() for value in table.values() for char in value}
+            special_chars = set()
+            for char in all_chars:
+                if ord(char) > 0x7F:  # 收集所有非ASCII字符
+                    special_chars.add(char)
+                
+        elif self.version == 'III':
+            # III版本逻辑：收集所有UTF-16码点>=0x80的字符
+            all_chars = {char for table in self.data.values() for value in table.values() for char in value}
+            special_chars = set()
+            for char in all_chars:
+                code_point = ord(char)
+                if code_point >= 0x80:  # 收集所有扩展字符
+                    special_chars.add(char)
+                
+        else:
+            # 默认使用IV版本逻辑
+            all_chars = {char for table in self.data.values() for value in table.values() for char in value}
+            special_chars = {char for char in all_chars if ord(char) > 255}
+            special_chars.discard(chr(0x2122))
+            special_chars.discard(chr(0x3000))
+            special_chars.discard(chr(0xFEFF))
+    
+        # 按Unicode码点排序，确保与CHARACTERS.txt顺序一致
+        sorted_chars = sorted(special_chars, key=lambda c: ord(c))
+        return "".join(sorted_chars)
         
     def open_font_generator(self):
         initial_chars = self.collect_and_filter_chars()
