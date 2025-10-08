@@ -504,6 +504,15 @@ class FontGeneratorDialog(QDialog):
         char_btn_layout.addWidget(self.btn_load_from_gxt)
         char_btn_layout.addWidget(self.btn_import_chars)
         char_btn_layout.addWidget(self.btn_input_chars)
+        self.btn_import_wm_vcchs = QPushButton('导入 wm_vcchs.dat')
+        self.btn_import_wm_vcchs.setToolTip('从 wm_vcchs.dat 文件提取字符')
+        self.btn_import_wm_vcchs.clicked.connect(self.import_wm_vcchs)
+        char_btn_layout.addWidget(self.btn_import_wm_vcchs)
+
+        self.btn_import_char_table = QPushButton('导入 char_table.dat')
+        self.btn_import_char_table.setToolTip('从 char_table.dat 文件提取字符')
+        self.btn_import_char_table.clicked.connect(self.import_char_table)
+        char_btn_layout.addWidget(self.btn_import_char_table)
         char_btn_layout.addStretch()
         
         chars_layout.addLayout(char_btn_layout)
@@ -732,6 +741,57 @@ class FontGeneratorDialog(QDialog):
                 "font_normal": self.font_normal_widget.get_font(),
             }
             return settings
+
+
+    def import_wm_vcchs(self):
+        path, _ = QFileDialog.getOpenFileName(self, "导入 wm_vcchs.dat 或 Chinese.dat 文件", "", "VC字库 (wm_vcchs.dat Chinese.dat)")
+        if not path:
+            return
+        try:
+            chars = set()
+            with open(path, 'rb') as f:
+                data = f.read()
+                for i in range(0, len(data), 2):
+                    row, col = data[i], data[i + 1]
+                    if not (row == 63 and col == 63):
+                        code = i // 2
+                        chars.add(chr(code))
+            if chars:
+                sorted_chars = "".join(sorted(chars))
+                self.characters = sorted_chars
+                self.update_char_count()
+                QMessageBox.information(self, "导入成功", f"已从 wm_vcchs.dat（Chinese.dat） 读取 {len(chars)} 个字符。")
+            else:
+                QMessageBox.warning(self, "提示", "未提取到任何有效字符。")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"解析文件失败：{str(e)}")
+
+    def import_char_table(self):
+        path, _ = QFileDialog.getOpenFileName(self, "导入 char_table.dat 文件", "", "GTA4字库 (char_table.dat)")
+        if not path:
+            return
+        try:
+            with open(path, 'rb') as f:
+                count_bytes = f.read(4)
+                if len(count_bytes) < 4:
+                    raise ValueError("文件格式错误")
+                count = int.from_bytes(count_bytes, 'little')
+                chars = []
+                for _ in range(count):
+                    code_bytes = f.read(4)
+                    if len(code_bytes) < 4:
+                        break
+                    code = int.from_bytes(code_bytes, 'little')
+                    chars.append(chr(code))
+            if chars:
+                self.characters = "".join(sorted(set(chars)))
+                self.update_char_count()
+                QMessageBox.information(self, "导入成功", f"已从 char_table.dat 读取 {len(chars)} 个字符。")
+            else:
+                QMessageBox.warning(self, "提示", "文件中没有有效字符。")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"解析文件失败：{str(e)}")
+
 
 class EditKeyDialog(QDialog):
     """编辑/新增 键值对对话框，支持多种模式"""
