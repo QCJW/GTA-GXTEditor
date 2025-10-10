@@ -1,16 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-更稳健的打包脚本：
-  - 自动安装 pyinstaller / pyside6（若未安装）
-  - 支持 --onefile / --onedir，支持 --console（保留控制台，便于调试）
-  - 自动收集 Qt 安装目录下所有 zh_CN.qm 并添加到 --add-data
-  - 自动添加工程 translations/ 文件夹（若存在）
-  - 可选择保留 build/.spec（--no-clean）
-用法示例：
-  python package_exe.py --onefile
-  python package_exe.py --onedir --console
-"""
 import os
 import subprocess
 import sys

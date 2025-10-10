@@ -15,12 +15,14 @@ ENTRY_RE = re.compile(r'^\s*((?:0[xX][0-9A-Fa-f]{8}|[A-Za-z0-9_]+))=\s*(.+?)\s*$
 def gta4_gxt_hash(key: str) -> int:
     ret_hash = 0
     i = 0
-    if key.startswith('"'):
+    if key and key[0] == '"':
         i = 1
     while i < len(key):
         c = key[i]
+        if c == '"':
+            break
         if 'A' <= c <= 'Z':
-            c = c.lower()
+            c = chr(ord(c) + 32)
         elif c == '\\':
             c = '/'
         c_val = ord(c) & 0xFF
@@ -28,6 +30,7 @@ def gta4_gxt_hash(key: str) -> int:
         mult = (1025 * tmp) & 0xFFFFFFFF
         ret_hash = ((mult >> 6) ^ mult) & 0xFFFFFFFF
         i += 1
+
     a = (9 * ret_hash) & 0xFFFFFFFF
     a_x = (a ^ (a >> 11)) & 0xFFFFFFFF
     ret_hash = (32769 * a_x) & 0xFFFFFFFF
