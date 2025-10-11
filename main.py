@@ -29,6 +29,7 @@ from VCGXT import VCGXT
 from SAGXT import SAGXT
 from LCGXT import LCGXT
 from whm_table import parse_whm_table, dump_whm_table
+import gta5_gxt2 # <-- 新增：导入 GTA V GXT2 模块
 
 # ========== Helper functions for validation (add these at the module level) ==========
 
@@ -39,6 +40,7 @@ def _get_key_validation_message(version, file_type='gxt'):
     if version == 'SA': return "SA键名必须是1-8位十六进制数"
     if version == 'III': return "III键名必须是1-7位数字、字母或下划线"
     if version == 'IV': return "IV键名必须是字母数字下划线组成的明文，或是0x/0X开头的8位十六进制数"
+    if version == 'V': return "V键名必须是明文，或是0x/0X开头的8位十六进制数" # <-- 新增
     return "键名格式不正确"
 
 def _validate_key_static(key, version, file_type='gxt'):
@@ -52,11 +54,12 @@ def _validate_key_static(key, version, file_type='gxt'):
         return re.fullmatch(r'[0-9a-fA-F]{1,8}', key) is not None
     elif version == 'III':
         return re.fullmatch(r'[0-9a-zA-Z_]{1,7}', key) is not None
-    elif version == 'IV':
+    elif version == 'IV' or version == 'V': # <-- 新增: V 和 IV 规则相同
         if key.lower().startswith('0x'):
             return re.fullmatch(r'0[xX][0-9a-fA-F]{8}', key) is not None
         else:
-            return re.fullmatch(r'[A-Za-z0-9_]+', key) is not None
+            # 允许任何非空字符串，因为它们将被哈希
+            return bool(key and re.fullmatch(r'[A-Za-z0-9_]+', key))
     return True
 
 def _validate_key_for_import_optimized(key, version):
@@ -732,11 +735,10 @@ class FontGeneratorDialog(QDialog):
     def get_settings(self):
             ver_map = {"GTA IV": "IV", "GTA San Andreas": "SA", "GTA Vice City": "VC", "GTA III": "III"}
             version = ver_map.get(self.version_combo.currentText())
-            resolution = int(self.res_combo.currentText().split('x')[0])
         
             settings = {
                 "version": version,
-                "resolution": resolution,
+                "resolution": int(self.res_combo.currentText().split('x')[0]),
                 "characters": self.characters,
                 "font_normal": self.font_normal_widget.get_font(),
             }
@@ -982,7 +984,13 @@ class VersionDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("选择版本")
         layout = QVBoxLayout(self)
-        self.versions = [("GTA IV", "IV"), ("GTA Vice City", "VC"), ("GTA San Andreas", "SA"), ("GTA III (LC)", "III")]
+        self.versions = [
+            ("GTA V", "V"), # <-- 新增
+            ("GTA IV", "IV"), 
+            ("GTA Vice City", "VC"), 
+            ("GTA San Andreas", "SA"), 
+            ("GTA III (LC)", "III")
+        ]
         
         if include_whm:
             self.versions.append(("WHM Table (DAT)", "WHM"))
@@ -995,9 +1003,15 @@ class VersionDialog(QDialog):
             layout.addWidget(btn)
             self.inputs.append((btn, val))
 
+        # 默认选中
+        default_found = False
         for b, val in self.inputs:
             if val == default:
                 b.setChecked(True)
+                default_found = True
+                break
+        if not default_found and self.inputs:
+             self.inputs[0][0].setChecked(True) # 如果默认值不在列表中，选第一个
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, parent=self)
         self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("确定")
@@ -1014,7 +1028,7 @@ class VersionDialog(QDialog):
         for b, v in self.inputs:
             if b.isChecked():
                 return v
-        return "IV"
+        return "V" # 默认返回 V
 
 # ========== 主窗口 ==========
 class GXTEditorApp(QMainWindow):
@@ -1047,7 +1061,7 @@ class GXTEditorApp(QMainWindow):
         self.file_type = None
         self.current_table = None
         self.value_display_limit = 60
-        self.version_filename_map = {'IV': 'GTA4.txt', 'VC': 'GTAVC.txt', 'SA': 'GTASA.txt', 'III': 'GTA3.txt'}
+        self.version_filename_map = {'IV': 'GTA4.txt', 'VC': 'GTAVC.txt', 'SA': 'GTASA.txt', 'III': 'GTA3.txt', 'V': 'GTAV.txt'}
         self.modified = False
         
         # --- 持久化设置 ---
@@ -1292,13 +1306,14 @@ class GXTEditorApp(QMainWindow):
         file_menu.addAction(self._act("➡ 导出为单个TXT", lambda: self.export_txt(single=True)))
         file_menu.addAction(self._act("➡ 导出为多个TXT（文件夹）", lambda: self.export_txt(single=False)))
         file_menu.addSeparator()
-        file_menu.addAction(self._act("📎 设置.gxt文件关联", self.set_file_association))
+        file_menu.addAction(self._act("📎 设置.gxt/.gxt2文件关联", self.set_file_association))
         file_menu.addSeparator()
         file_menu.addAction(self._act("❌ 退出", self.close, "Ctrl+Q"))
         
         tools_menu = QMenu("工具", self)
         menubar.addMenu(tools_menu)
-        tools_menu.addAction(self._act("🎨 GTA 字体贴图生成器", self.open_font_generator))
+        self.font_generator_action = self._act("🎨 GTA 字体贴图生成器", self.open_font_generator)
+        tools_menu.addAction(self.font_generator_action)
 
         help_menu = QMenu("帮助", self)
         menubar.addMenu(help_menu)
@@ -1308,7 +1323,7 @@ class GXTEditorApp(QMainWindow):
     def _setup_statusbar(self):
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.update_status("就绪。将 .gxt, whm_table.dat 或 .txt 文件拖入窗口可打开。")
+        self.update_status("就绪。将 .gxt, .gxt2, whm_table.dat 或 .txt 文件拖入窗口可打开。")
 
     def _setup_body(self):
         self.tables_dock = QDockWidget("表列表", self)
@@ -1470,12 +1485,14 @@ class GXTEditorApp(QMainWindow):
         lower_path = path.lower()
         if lower_path.endswith(".gxt"):
             self.open_gxt(path)
+        elif lower_path.endswith(".gxt2"): # <-- 新增
+            self.open_gxt2(path)
         elif os.path.basename(lower_path) == "whm_table.dat":
             self.open_dat(path)
         elif lower_path.endswith(".txt"):
             self.open_txt(files=[path])
         else:
-            self.update_status("错误：请拖拽 .gxt, whm_table.dat 或 .txt 文件。")
+            self.update_status("错误：请拖拽 .gxt, .gxt2, whm_table.dat 或 .txt 文件。")
 
     def filter_tables(self):
         keyword = self.table_search.text().lower()
@@ -1634,6 +1651,7 @@ class GXTEditorApp(QMainWindow):
 
     def validate_table_name(self, name):
         """验证表名是否符合当前版本的规则"""
+        if self.version == 'V': return True # GXT2没有表，内部表名无需验证
         if self.version == 'VC' or self.version == 'SA':
             return re.match(r'^[0-9A-Z_]{1,7}$', name) is not None
         elif self.version == 'IV':
@@ -1657,8 +1675,8 @@ class GXTEditorApp(QMainWindow):
         return "表名格式不正确"
 
     def add_table(self):
-        if self.file_type == 'dat':
-            QMessageBox.information(self, "提示", "whm_table.dat 文件不支持多表操作。")
+        if self.file_type == 'dat' or self.version == 'V':
+            QMessageBox.information(self, "提示", "当前文件类型不支持多表操作。")
             return
         if not hasattr(self, 'version') or self.version is None:
             QMessageBox.information(self, "提示", "请先新建或打开一个GXT文件。")
@@ -1687,8 +1705,8 @@ class GXTEditorApp(QMainWindow):
             self.set_modified(True)
 
     def delete_table(self):
-        if self.file_type == 'dat':
-            QMessageBox.information(self, "提示", "whm_table.dat 文件不支持多表操作。")
+        if self.file_type == 'dat' or self.version == 'V':
+            QMessageBox.information(self, "提示", "当前文件类型不支持多表操作。")
             return
         if not self.current_table: return
         msg_box = QMessageBox(QMessageBox.Icon.Question, "确认", f"是否删除表 '{self.current_table}'？\n此操作不可恢复！", 
@@ -1711,7 +1729,7 @@ class GXTEditorApp(QMainWindow):
             self.set_modified(True)
 
     def rename_table(self, _item):
-        if self.file_type == 'dat':
+        if self.file_type == 'dat' or self.version == 'V':
             return
         if not self.current_table: return
         old = self.current_table
@@ -1746,7 +1764,7 @@ class GXTEditorApp(QMainWindow):
         if not filepath: return
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
-                if self.version != 'III': f.write(f"[{self.current_table}]\n")
+                if self.version != 'III' and self.version != 'V': f.write(f"[{self.current_table}]\n")
                 for k, v in sorted(self.data[self.current_table].items()): f.write(f"{k}={v}\n")
             QMessageBox.information(self, "导出成功", f"表 '{self.current_table}' 已导出到:\n{filepath}")
         except Exception as e:
@@ -2059,14 +2077,15 @@ class GXTEditorApp(QMainWindow):
 
     def new_gxt(self):
         if self.modified and not self.prompt_save(): return
-        dlg = VersionDialog(self, default="IV")
+        dlg = VersionDialog(self, default="V")
         if dlg.exec() != QDialog.DialogCode.Accepted: return
         self.data.clear()
         self.version = dlg.get_value()
         self.filepath = None
         self.file_type = 'gxt'
         self.current_table = None
-        if self.version == 'III': self.data["MAIN"] = {}
+        if self.version == 'III' or self.version == 'V': # <-- 修改
+             self.data["MAIN"] = {}
         self.table_search.clear()
         self.filter_tables()
         if self.global_search_checkbox.isChecked():
@@ -2075,7 +2094,7 @@ class GXTEditorApp(QMainWindow):
             self.search_key_value()
         if self.table_list.count() > 0: self.table_list.setCurrentRow(0)
         self.update_status(f"已创建新GXT文件 (版本: {self.version})")
-        self._update_ui_for_file_type()
+        self._update_ui_for_version()
         self.set_modified(False)
         QMessageBox.information(self, "成功", f"已成功创建新的GXT文件\n版本: {self.version}")
 
@@ -2096,13 +2115,13 @@ class GXTEditorApp(QMainWindow):
             self.search_key_value()
         if self.table_list.count() > 0: self.table_list.setCurrentRow(0)
         self.update_status("已创建新WHM文件")
-        self._update_ui_for_file_type()
+        self._update_ui_for_version()
         self.set_modified(False)
         QMessageBox.information(self, "成功", "已成功创建新的WHM文件")
 
     def open_file_dialog(self):
         if self.modified and not self.prompt_save(): return
-        path, _ = QFileDialog.getOpenFileName(self, "打开文件", "", "GTA文本文件 (*.gxt whm_table.dat);;GXT文件 (*.gxt);;WHM Table (whm_table.dat);;所有文件 (*.*)")
+        path, _ = QFileDialog.getOpenFileName(self, "打开文件", "", "GTA文本文件 (*.gxt *.gxt2 whm_table.dat);;GXT文件 (*.gxt *.gxt2);;WHM Table (whm_table.dat);;所有文件 (*.*)")
         self.open_file(path)
 
     def open_gxt(self, path=None):
@@ -2140,10 +2159,38 @@ class GXTEditorApp(QMainWindow):
                 total_keys = sum(len(table) for table in self.data.values())
                 
                 QMessageBox.information(self, "成功", f"已成功打开GXT文件\n版本: {display_version}\n表数量: {len(self.data)}\n键值对总数: {total_keys}")
-                self._update_ui_for_file_type()
+                self._update_ui_for_version()
                 self.set_modified(False)
         except Exception as e:
             QMessageBox.critical(self, "错误", f"打开文件失败: {str(e)}")
+
+    def open_gxt2(self, path): # <-- 新增
+        try:
+            parsed_data = gta5_gxt2.parse_gxt2(path)
+            self.data.clear()
+
+            # 使用文件名作为表名
+            table_name = Path(path).stem
+            self.data[table_name] = {f'0x{h:08X}': v for h, v in parsed_data.items()}
+
+            self.version = 'V'
+            self.filepath = path
+            self.file_type = 'gxt'
+            self.table_search.clear()
+            self.filter_tables()
+            if self.table_list.count() > 0:
+                self.table_list.setCurrentRow(0)
+            
+            self.update_status(f"已打开GXT2文件: {os.path.basename(path)}, 版本: V")
+            total_keys = len(self.data[table_name])
+            QMessageBox.information(self, "成功", f"已成功打开GTA V GXT2文件\n键值对总数: {total_keys}")
+            
+            self._update_ui_for_version()
+            self.set_modified(False)
+
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"打开 GXT2 文件失败: {str(e)}")
+
 
     def open_dat(self, path=None):
         try:
@@ -2168,7 +2215,7 @@ class GXTEditorApp(QMainWindow):
             if self.table_list.count() > 0: self.table_list.setCurrentRow(0)
             self.update_status(f"已打开DAT文件: {os.path.basename(path)}")
             QMessageBox.information(self, "成功", f"已成功打开 whm_table.dat 文件\n条目数量: {len(self.data[table_name])}")
-            self._update_ui_for_file_type()
+            self._update_ui_for_version()
             self.set_modified(False)
         except Exception as e:
             QMessageBox.critical(self, "错误", f"打开文件失败: {str(e)}")
@@ -2180,7 +2227,7 @@ class GXTEditorApp(QMainWindow):
             if self.modified and not self.prompt_save():
                 return
             
-            dlg = VersionDialog(self, default="IV")
+            dlg = VersionDialog(self, default="V")
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
             version = dlg.get_value()
@@ -2211,7 +2258,18 @@ class GXTEditorApp(QMainWindow):
                 progress.setValue(i)
                 progress.setLabelText(f"正在处理: {os.path.basename(file_path)}")
 
-                if version == 'IV':
+                if version == 'V':
+                     parsed_dict = gta5_gxt2.parse_txt(file_path)
+                     # 用第一个txt文件名作为表名
+                     table_name = Path(files[0]).stem
+                     if table_name not in temp_data:
+                         temp_data[table_name] = {}
+                     
+                     # 转换为内部格式并合并
+                     for h, v in parsed_dict.items():
+                         temp_data[table_name][f'0x{h:08X}'] = v
+
+                elif version == 'IV':
                     # For IV, use the specific loader that handles hash strings
                     parsed_data, invalid_keys, _ = load_iv_txt(Path(file_path), validate_callback=_validate_key_for_import_optimized)
                     if invalid_keys:
@@ -2314,7 +2372,7 @@ class GXTEditorApp(QMainWindow):
             if self.table_list.count() > 0:
                 self.table_list.setCurrentRow(0)
             self.update_status(f"已成功处理 {len(files)} 个TXT文件 (版本: {version})")
-            self._update_ui_for_file_type()
+            self._update_ui_for_version()
 
         except Exception as e:
             progress.close()
@@ -2363,11 +2421,24 @@ class GXTEditorApp(QMainWindow):
             QMessageBox.information(self, "合并完成", f"合并完成。\n\n- 新增键值: {added_count}\n- 覆盖键值: {overwritten_count}")
 
 
-    def _update_ui_for_file_type(self):
+    def _update_ui_for_version(self):
+        """根据当前版本更新UI状态"""
         is_dat = self.file_type == 'dat'
-        self.btn_add_table.setEnabled(not is_dat)
-        self.btn_del_table.setEnabled(not is_dat)
-        self.table_list.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu if is_dat else Qt.ContextMenuPolicy.DefaultContextMenu)
+        is_gta5 = self.version == 'V'
+        
+        # 禁用/启用 表格操作按钮
+        can_manage_tables = not is_dat and not is_gta5
+        self.btn_add_table.setEnabled(can_manage_tables)
+        self.btn_del_table.setEnabled(can_manage_tables)
+        
+        # 禁用/启用 表格重命名
+        self.table_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.NoContextMenu if is_dat or is_gta5 else Qt.ContextMenuPolicy.DefaultContextMenu
+        )
+        
+        # 禁用/启用 字体生成器
+        self.font_generator_action.setEnabled(not is_gta5)
+
 
     def save_file(self):
         if not self.version: 
@@ -2387,6 +2458,10 @@ class GXTEditorApp(QMainWindow):
             default_name = os.path.basename(self.filepath) if self.filepath else "whm_table.dat"
             filter_str = "WHM Table (whm_table.dat)"
             expected_filename = 'whm_table.dat'
+        elif self.version == 'V':
+            default_name = os.path.basename(self.filepath) if self.filepath else "output.gxt2"
+            filter_str = "GXT2文件 (*.gxt2)"
+            expected_ext = '.gxt2'
         else:
             default_name = os.path.basename(self.filepath) if self.filepath else "output.gxt"
             filter_str = "GXT文件 (*.gxt)"
@@ -2428,30 +2503,48 @@ class GXTEditorApp(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"保存 whm_table.dat 文件失败: {str(e)}")
             return
-
+        
+        # GXT / GXT2 保存逻辑
         gen_extra = False
-        if self.remember_gen_extra_choice is None:
-            msg_box = QMessageBox(QMessageBox.Icon.Question, "确认", "是否生成字符映射辅助文件？", 
-                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
-            msg_box.button(QMessageBox.StandardButton.Yes).setText("是")
-            msg_box.button(QMessageBox.StandardButton.No).setText("否")
-            check_box = QCheckBox("记住我的选择")
-            msg_box.setCheckBox(check_box)
-            reply = msg_box.exec()
+        if self.version != 'V': # <-- 新增：GXT2不生成辅助文件
+            if self.remember_gen_extra_choice is None:
+                msg_box = QMessageBox(QMessageBox.Icon.Question, "确认", "是否生成字符映射辅助文件？", 
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
+                msg_box.button(QMessageBox.StandardButton.Yes).setText("是")
+                msg_box.button(QMessageBox.StandardButton.No).setText("否")
+                check_box = QCheckBox("记住我的选择")
+                msg_box.setCheckBox(check_box)
+                reply = msg_box.exec()
 
-            gen_extra = (reply == QMessageBox.StandardButton.Yes)
-            if check_box.isChecked():
-                self.remember_gen_extra_choice = gen_extra
-                self._save_settings()
-        else:
-            gen_extra = self.remember_gen_extra_choice
+                gen_extra = (reply == QMessageBox.StandardButton.Yes)
+                if check_box.isChecked():
+                    self.remember_gen_extra_choice = gen_extra
+                    self._save_settings()
+            else:
+                gen_extra = self.remember_gen_extra_choice
 
         original_dir = os.getcwd()
         try:
             dir_name = os.path.dirname(path)
             if dir_name:
                 os.chdir(dir_name)
-            if self.version == 'IV':
+            
+            if self.version == 'V':
+                strings_to_save = {}
+                # 合并所有表的数据
+                for table_content in self.data.values():
+                    for key, value in table_content.items():
+                        try:
+                            if key.lower().startswith('0x'):
+                                hash_val = int(key, 16)
+                            else:
+                                hash_val = gta5_gxt2.joaat(key)
+                            strings_to_save[hash_val] = value
+                        except ValueError:
+                            print(f"警告：跳过无效的键 '{key}'")
+                gta5_gxt2.save_gxt2(strings_to_save, os.path.basename(path))
+
+            elif self.version == 'IV':
                 m_Data = {}
                 all_chars = set()
                 for table_name, entries_dict in self.data.items():
@@ -2506,7 +2599,7 @@ class GXTEditorApp(QMainWindow):
                     if hasattr(g, 'm_WideCharCollection'): 
                         g.m_WideCharCollection.clear()
                 g.save_as_gxt(os.path.basename(path))
-            QMessageBox.information(self, "成功", f"GXT 已保存到 {path}")
+            QMessageBox.information(self, "成功", f"文件已保存到 {path}")
             self.set_modified(False)
         except Exception as e:
             QMessageBox.critical(self, "错误", f"保存文件失败: {str(e)}")
@@ -2525,11 +2618,11 @@ class GXTEditorApp(QMainWindow):
                 with open(filepath, 'w', encoding='utf-8') as f:
                     for i, (t, d) in enumerate(sorted(self.data.items())):
                         if i > 0: f.write("\n\n")
-                        if self.version != 'III': f.write(f"[{t}]\n")
+                        if self.version != 'III' and self.version != 'V': f.write(f"[{t}]\n")
                         for k, v in sorted(d.items()): f.write(f"{k}={v}\n")
                 QMessageBox.information(self, "导出成功", f"已导出到: {filepath}")
             else:
-                if self.version == 'III' or self.file_type == 'dat':
+                if self.version == 'III' or self.version == 'V' or self.file_type == 'dat':
                     QMessageBox.warning(self, "提示", "该文件类型不支持导出为多个TXT。")
                     return
                 
@@ -2689,12 +2782,12 @@ class GXTEditorApp(QMainWindow):
     def show_about(self):
         QMessageBox.information(self, "关于", 
             "倾城剑舞 GXT 编辑器 v2.0\n"
-            "支持 IV/VC/SA/III 的 GXT/TXT 编辑、导入导出。\n"
+            "支持 V/IV/VC/SA/III 的 GXT/TXT 编辑、导入导出。\n"
             "新增功能：文件关联、新建GXT、导出单个表、生成png透明汉化字体贴图、支持whm_table.dat编辑")
 
     def show_help(self):
         QMessageBox.information(self, "使用帮助", 
-            "1. 打开文件：菜单或将 .gxt / whm_table.dat / .txt 拖入窗口，也可通过文件关联gxt文件打开。\n"
+            "1. 打开文件：菜单或将 .gxt / .gxt2 / whm_table.dat / .txt 拖入窗口，也可通过文件关联gxt文件打开。\n"
             "2. 新建文件：文件菜单→新建GXT文件，选择游戏版本。\n"
             "3. 编辑：双击右侧列表中的任意条目，或右键选择“编辑”。\n"
             "4. 多选编辑：选择多行后右键选择“批量编辑”。\n"
@@ -2703,7 +2796,7 @@ class GXTEditorApp(QMainWindow):
             "7. 保存：支持生成字符映射辅助文件（可选），并可记住选择。\n"
             "8. 导出：支持导出整个GXT或单个表为TXT文件。\n"
             "9. TXT 导入：支持单个或多个TXT导入并直接生成GXT。如果已有GXT打开，则会进行合并。\n"
-            "10. GTA IV 特别说明：键名可为明文（如 T1_NAME_82）或哈希（0xhash），保存时自动转换哈希。\n"
+            "10. GTA IV/V 特别说明：键名可为明文（如 T1_NAME_82）或哈希（0xhash），保存时自动转换哈希。\n"
             "11. WHM Table 支持：可以打开和保存以及编辑 GTA4 民间汉化补丁的 whm_table.dat 文件。\n"
             "12. 字体生成器：工具菜单→GTA字体贴图生成器，用于创建游戏字体PNG文件。以及支持加载外部字体文件，点击预览图可放大查看。【仅限：汉化字体贴图】")
 
@@ -2714,19 +2807,26 @@ class GXTEditorApp(QMainWindow):
         try:
             import winreg
             exe_path = f'"{sys.executable}" "{os.path.abspath(sys.argv[0])}"' if not getattr(sys, 'frozen', False) else sys.executable
-            key_path = r"Software\Classes"
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, f"{key_path}\\.gxt") as key:
+            
+            # --- 设置 .gxt ---
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\.gxt") as key:
                 winreg.SetValue(key, '', winreg.REG_SZ, 'GXTEditor.File')
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, f"{key_path}\\GXTEditor.File") as key:
+            
+            # --- 设置 .gxt2 ---
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\.gxt2") as key:
+                winreg.SetValue(key, '', winreg.REG_SZ, 'GXTEditor.File')
+            
+            # --- 设置通用关联 ---
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\GXTEditor.File") as key:
                 winreg.SetValue(key, '', winreg.REG_SZ, 'GTA文本文件')
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, f"{key_path}\\GXTEditor.File\\DefaultIcon") as key:
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\GXTEditor.File\DefaultIcon") as key:
                 winreg.SetValue(key, '', winreg.REG_SZ, f'"{exe_path}",0')
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, f"{key_path}\\GXTEditor.File\\shell\\open\\command") as key:
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\GXTEditor.File\shell\open\command") as key:
                 winreg.SetValue(key, '', winreg.REG_SZ, f'"{exe_path}" "%1"')
             
             import ctypes
             ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)
-            QMessageBox.information(self, "成功", "已设置.gxt文件关联! 可能需要重启资源管理器或电脑生效。")
+            QMessageBox.information(self, "成功", "已设置.gxt和.gxt2文件关联! 可能需要重启资源管理器或电脑生效。")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"设置文件关联失败: {str(e)}")
 
@@ -2831,7 +2931,7 @@ if __name__ == "__main__":
     file_to_open = None
     if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
         file_lower = sys.argv[1].lower()
-        if file_lower.endswith('.gxt') or os.path.basename(file_lower) == 'whm_table.dat':
+        if file_lower.endswith(('.gxt', '.gxt2')) or os.path.basename(file_lower) == 'whm_table.dat':
             file_to_open = sys.argv[1]
 
     editor = GXTEditorApp(file_to_open)
