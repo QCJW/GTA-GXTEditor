@@ -1043,7 +1043,7 @@ class VersionDialog(QDialog):
 class GXTEditorApp(QMainWindow):
     def __init__(self, file_to_open=None):
         super().__init__()
-        self.setWindowTitle(" GTA文本对话表编辑器 v2.1 作者：倾城剑舞")
+        self.setWindowTitle(" GTA文本对话表编辑器 v2.0 作者：倾城剑舞")
         self.resize(1240, 760)
         self.setAcceptDrops(True)
         
@@ -1305,7 +1305,7 @@ class GXTEditorApp(QMainWindow):
         file_menu = QMenu("文件", self)
         menubar.addMenu(file_menu)
         file_menu.addAction(self._act("📂 打开GTA文本文件", self.open_file_dialog, "Ctrl+O"))
-        file_menu.addAction(self._act("📄 导入TXT文件（可多选）", self.open_txt))
+        file_menu.addAction(self._act("📄 导入TXT文件/文件夹", self.open_txt))
         file_menu.addSeparator()
         file_menu.addAction(self._act("🆕 新建GXT文件", self.new_gxt))
         file_menu.addAction(self._act("📝 新建whm_table文件", self.new_whm))
@@ -1332,7 +1332,7 @@ class GXTEditorApp(QMainWindow):
     def _setup_statusbar(self):
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.update_status("就绪。将 .gxt, .gxt2, whm_table.dat 或 .txt 文件拖入窗口可打开。")
+        self.update_status("就绪。将 .gxt, .gxt2, whm_table.dat, .txt 文件或包含 .txt 的文件夹拖入窗口可打开。")
 
     def _setup_body(self):
         self.tables_dock = QDockWidget("表列表", self)
@@ -1483,21 +1483,30 @@ class GXTEditorApp(QMainWindow):
         if event.mimeData().hasUrls(): event.acceptProposedAction()
 
     def dropEvent(self, event):
-        """处理文件拖放，支持单个或多个文件。"""
+        """处理文件和文件夹拖放，支持单个或多个项目。"""
         urls = event.mimeData().urls()
         if not urls:
             return
-        
+    
         paths = [url.toLocalFile() for url in urls]
-        
-        # 筛选出TXT文件
-        txt_files = [p for p in paths if p.lower().endswith('.txt')]
-        
-        if len(paths) > 1 and txt_files:
-            # 如果拖放了多个文件且其中有TXT文件，则假定用户想要合并/打开所有TXT文件
+        txt_files = []
+    
+        for path in paths:
+            if os.path.isdir(path):
+                # 如果是目录，则递归查找所有 .txt 文件
+                for root, _, files in os.walk(path):
+                    for name in files:
+                        if name.lower().endswith('.txt'):
+                            txt_files.append(os.path.join(root, name))
+            elif path.lower().endswith('.txt'):
+                # 如果是 .txt 文件，直接添加
+                txt_files.append(path)
+    
+        if txt_files:
+            # 如果找到了任何 .txt 文件（无论是在文件夹中还是直接拖入），则以 TXT 模式打开
             self.open_txt(files=txt_files)
         elif paths:
-            # 如果只拖放了一个文件，或多个非TXT文件，则按标准流程打开第一个文件
+            # 如果没有找到 .txt 文件，但有其他文件，则按标准流程打开第一个文件
             self.open_file(paths[0])
 
     def open_file(self, path):
@@ -1513,7 +1522,8 @@ class GXTEditorApp(QMainWindow):
         elif lower_path.endswith(".txt"):
             self.open_txt(files=[path])
         else:
-            self.update_status("错误：请拖拽 .gxt, .gxt2, whm_table.dat 或 .txt 文件。")
+            self.update_status(f"错误：不支持的文件类型: {os.path.basename(path)}")
+
 
     def filter_tables(self):
         keyword = self.table_search.text().lower()
@@ -2256,9 +2266,26 @@ class GXTEditorApp(QMainWindow):
             version = self.version
 
         if not files:
-            files, _ = QFileDialog.getOpenFileNames(self, "打开TXT文件", "", "文本文件 (*.txt);;所有文件 (*.*)")
-        if not files:
-            return
+            # 修改：允许用户选择文件或目录
+            dialog = QFileDialog(self, "打开TXT文件或文件夹", "", "文本文件 (*.txt)")
+            dialog.setFileMode(QFileDialog.FileMode.Directory)
+            if dialog.exec():
+                selected = dialog.selectedFiles()
+                if not selected:
+                    return
+                
+                path = selected[0]
+                files = []
+                if os.path.isdir(path):
+                    for root, _, fnames in os.walk(path):
+                        for fname in fnames:
+                            if fname.lower().endswith('.txt'):
+                                files.append(os.path.join(root, fname))
+                elif path.lower().endswith('.txt'):
+                     files.append(path)
+            
+            if not files:
+                return
 
         # --- Progress Dialog Setup ---
         progress = QProgressDialog("正在准备导入...", "取消", 0, len(files), self)
@@ -2802,7 +2829,7 @@ class GXTEditorApp(QMainWindow):
 
     def show_about(self):
         QMessageBox.information(self, "关于", 
-            "倾城剑舞 GXT 编辑器 v2.1\n"
+            "倾城剑舞 GXT 编辑器 v2.0\n"
             "支持 V/IV/VC/SA/III 的 GXT/TXT 编辑、导入导出。\n"
             "新增功能：文件关联、新建GXT、导出单个表、生成png透明汉化字体贴图、支持whm_table.dat编辑")
 
@@ -2855,7 +2882,7 @@ class GXTEditorApp(QMainWindow):
         """设置修改状态并更新窗口标题"""
         if self.modified == modified: return
         self.modified = modified
-        title = " GTA文本对话表编辑器 v2.1 作者：倾城剑舞"
+        title = " GTA文本对话表编辑器 v2.0 作者：倾城剑舞"
         if self.filepath:
             title = f"{os.path.basename(self.filepath)} - {title}"
         if modified:
