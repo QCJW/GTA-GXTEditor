@@ -958,13 +958,22 @@ class EditKeyDialog(QDialog):
         
         else: # --- 单个模式逻辑 ---
             new_key = self.key_edit.text().strip()
-            new_value = self.value_edit.toPlainText().rstrip("\n")
+            new_value_raw = self.value_edit.toPlainText()
+
+            # 检查并移除换行符
+            if '\n' in new_value_raw:
+                new_value = new_value_raw.replace('\n', '')
+                QMessageBox.information(self, "提示", "检测到值(Value)中存在换行符，已被自动移除。")
+            else:
+                new_value = new_value_raw
             
+            new_value = new_value.rstrip() # 移除末尾空白
+
             if not self.validate_key(new_key):
                 QMessageBox.critical(self, "错误", f"键名格式不正确！\n{self.get_validation_error_message()}")
                 return
             
-            if new_key != self.original_key and not new_key:
+            if not new_key:
                 QMessageBox.critical(self, "错误", "键名不能为空！")
                 return
                 
@@ -1474,10 +1483,22 @@ class GXTEditorApp(QMainWindow):
         if event.mimeData().hasUrls(): event.acceptProposedAction()
 
     def dropEvent(self, event):
+        """处理文件拖放，支持单个或多个文件。"""
         urls = event.mimeData().urls()
-        if not urls: return
-        path = urls[0].toLocalFile()
-        self.open_file(path)
+        if not urls:
+            return
+        
+        paths = [url.toLocalFile() for url in urls]
+        
+        # 筛选出TXT文件
+        txt_files = [p for p in paths if p.lower().endswith('.txt')]
+        
+        if len(paths) > 1 and txt_files:
+            # 如果拖放了多个文件且其中有TXT文件，则假定用户想要合并/打开所有TXT文件
+            self.open_txt(files=txt_files)
+        elif paths:
+            # 如果只拖放了一个文件，或多个非TXT文件，则按标准流程打开第一个文件
+            self.open_file(paths[0])
 
     def open_file(self, path):
         if not path or not os.path.exists(path): return
