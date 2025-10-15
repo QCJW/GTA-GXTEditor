@@ -9,18 +9,12 @@ OUTPUT_GXT = Path('chinese.gxt')
 
 # ---------- 文本格式 ----------
 TABLE_RE = re.compile(r'^\[([0-9a-zA-Z_]{1,7})\]\s*$')
-ENTRY_RE = re.compile(r'^\s*((?:0[xX][0-9A-Fa-f]{8}|[A-Za-z0-9_]+))=\s*(.+?)\s*$')
+ENTRY_RE = re.compile(r'^\s*((?:0[xX][0-9A-Fa-f]{8}|[A-Za-z0-9_]+))\s*=\s*(.*)\s*$')
 
 # ---------- GTA4 GXT 哈希 ----------
 def gta4_gxt_hash(key: str) -> int:
     ret_hash = 0
-    i = 0
-    if key and key[0] == '"':
-        i = 1
-    while i < len(key):
-        c = key[i]
-        if c == '"':
-            break
+    for c in key:
         if 'A' <= c <= 'Z':
             c = chr(ord(c) + 32)
         elif c == '\\':
@@ -29,7 +23,6 @@ def gta4_gxt_hash(key: str) -> int:
         tmp = (ret_hash + c_val) & 0xFFFFFFFF
         mult = (1025 * tmp) & 0xFFFFFFFF
         ret_hash = ((mult >> 6) ^ mult) & 0xFFFFFFFF
-        i += 1
 
     a = (9 * ret_hash) & 0xFFFFFFFF
     a_x = (a ^ (a >> 11)) & 0xFFFFFFFF
