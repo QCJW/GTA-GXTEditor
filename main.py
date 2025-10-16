@@ -795,6 +795,191 @@ class FontGeneratorDialog(QDialog):
             QMessageBox.critical(self, "错误", f"解析文件失败：{str(e)}")
 
 
+# ========== 新增: 码表转换工具 ==========
+class CodepageConverterDialog(QDialog):
+    """码表转换工具对话框"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.gxt_editor = parent
+        self.setWindowTitle("码表转换工具")
+        self.setMinimumSize(500, 200)
+
+        self.forward_map = {}
+        self.reverse_map = {}
+
+        layout = QVBoxLayout(self)
+        
+        # --- 文件加载区 ---
+        load_group = QGroupBox("加载码表")
+        load_layout = QVBoxLayout(load_group)
+        
+        load_row = QHBoxLayout()
+        self.load_button = QPushButton("📂 浏览并加载码表文件...")
+        self.load_button.clicked.connect(self.load_file)
+        self.status_label = QLabel("未加载码表。")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        load_row.addWidget(self.load_button, 1)
+        load_layout.addLayout(load_row)
+        load_layout.addWidget(self.status_label)
+        layout.addWidget(load_group)
+
+        # --- 操作区 ---
+        action_group = QGroupBox("执行转换")
+        action_layout = QHBoxLayout(action_group)
+        action_layout.setSpacing(15)
+
+        self.apply_button = QPushButton("▶️ 应用码表 (正向转换)")
+        self.apply_button.setToolTip("将GXT中的字符，根据码表转换为新的字符。\n例如: '一' -> 新字符")
+        self.apply_button.clicked.connect(lambda: self.run_conversion(reverse=True))
+        
+        self.revert_button = QPushButton("◀️ 还原码表 (逆向转换)")
+        self.revert_button.setToolTip("将GXT中的字符，根据码表还原为原始字符。\n例如: 新字符 -> '一'")
+        self.revert_button.clicked.connect(lambda: self.run_conversion(reverse=False))
+        
+        action_layout.addWidget(self.apply_button)
+        action_layout.addWidget(self.revert_button)
+        layout.addWidget(action_group)
+        
+        self.apply_button.setEnabled(False)
+        self.revert_button.setEnabled(False)
+
+        # --- 底部按钮 ---
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        self.buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+
+    def load_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择码表文件", "", "文本文件 (*.txt)")
+        if not path:
+            return
+            
+        self.forward_map.clear()
+        self.reverse_map.clear()
+        
+        try:
+            with open(path, 'r', encoding='utf-8-sig') as f:
+                for line in f:
+                    parsed = self._parse_line(line)
+                    if parsed:
+                        source_char, dest_char = parsed
+                        self.forward_map[source_char] = dest_char
+                        self.reverse_map[dest_char] = source_char
+
+            if self.forward_map:
+                self.status_label.setText(f"加载成功！共 {len(self.forward_map)} 条映射。")
+                self.apply_button.setEnabled(True)
+                self.revert_button.setEnabled(True)
+                QMessageBox.information(self, "成功", f"码表加载成功，共 {len(self.forward_map)} 条映射。")
+            else:
+                self.status_label.setText("加载失败或文件为空。")
+                self.apply_button.setEnabled(False)
+                self.revert_button.setEnabled(False)
+                QMessageBox.warning(self, "警告", "未能从文件中解析出任何有效的映射规则。")
+
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"读取或解析文件失败: {e}")
+            self.status_label.setText(f"加载失败: {e}")
+
+    def _parse_line(self, line):
+        line = line.strip()
+        if not line or line.startswith('#') or line.startswith('//'):
+            return None
+
+        try:
+            # 格式 1: Hex=Hex (e.g., 00A9=0080)
+            match = re.fullmatch(r'([0-9a-fA-F]+)\s*=\s*([0-9a-fA-F]+)', line)
+            if match:
+                key_code = int(match.group(1), 16)
+                val_code = int(match.group(2), 16)
+                return chr(key_code), chr(val_code)
+
+            # 格式 2: Char<sep>Hex (e.g., 一 0129)
+            # 匹配第一个非空白字符，然后是任意空白，最后是十六进制数
+            match = re.fullmatch(r'\s*(.)\s+([0-9a-fA-F]+)\s*', line, re.UNICODE)
+            if match:
+                char = match.group(1)
+                val_code = int(match.group(2), 16)
+                return char, chr(val_code)
+        except (ValueError, IndexError):
+            return None
+            
+        return None
+
+    def run_conversion(self, reverse=False):
+        if not self.forward_map:
+            QMessageBox.warning(self, "错误", "请先加载一个码表文件。")
+            return
+            
+        mapping = self.reverse_map if reverse else self.forward_map
+        op_name = "正向转换" if reverse else "逆向转换"
+        
+        reply = QMessageBox.question(self, "确认操作",
+                                     f"确定要对当前所有GXT数据执行“{op_name}”吗？\n此操作将直接修改内存中的数据。",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                     QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.No:
+            return
+
+        progress = QProgressDialog(f"正在执行 {op_name}...", "取消", 0, len(self.gxt_editor.data), self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.show()
+
+        unmapped_chars = set()
+        gxt_data = self.gxt_editor.data
+        
+        processed_tables = 0
+        for table_name, table_content in gxt_data.items():
+            if progress.wasCanceled():
+                break
+            progress.setValue(processed_tables)
+            progress.setLabelText(f"正在处理表: {table_name}")
+            
+            for key, value in table_content.items():
+                new_value = []
+                for char in value:
+                    if char in mapping:
+                        new_value.append(mapping[char])
+                    else:
+                        new_value.append(char)
+                        if char not in unmapped_chars:
+                             # 仅当此字符不是码表的目标字符时才报告
+                             if char not in self.reverse_map:
+                                unmapped_chars.add(char)
+                gxt_data[table_name][key] = "".join(new_value)
+            processed_tables += 1
+        
+        progress.setValue(len(self.gxt_editor.data))
+        
+        if progress.wasCanceled():
+            self.gxt_editor.refresh_keys()
+            QMessageBox.information(self, "已取消", "操作已被用户取消。")
+            return
+
+        self.gxt_editor.set_modified(True)
+        # 刷新主窗口的表格视图
+        if self.gxt_editor.global_search_checkbox.isChecked():
+            self.gxt_editor.search_key_value()
+        else:
+            self.gxt_editor.refresh_keys()
+        
+        if unmapped_chars:
+            sorted_unmapped = sorted(list(unmapped_chars))
+            char_list_str = "".join(sorted_unmapped)
+            
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("转换警告")
+            msg_box.setText(f"转换完成，但有 {len(unmapped_chars)} 个字符在码表中未找到，已保持原样。")
+            msg_box.setDetailedText("未映射的字符列表:\n" + char_list_str)
+            msg_box.exec()
+        else:
+            QMessageBox.information(self, "成功", f"{op_name} 已成功完成！")
+            
+        self.accept()
+
+
 class EditKeyDialog(QDialog):
     """编辑/新增 键值对对话框，支持多种模式"""
     def __init__(self, parent=None, title="编辑键值对", key="", value="", version="IV", file_type="gxt",
@@ -1073,8 +1258,15 @@ class GXTEditorApp(QMainWindow):
         self.version_filename_map = {'IV': 'GTA4.txt', 'VC': 'GTAVC.txt', 'SA': 'GTASA.txt', 'III': 'GTA3.txt', 'V': 'GTAV.txt'}
         self.modified = False
         
-        # --- 持久化设置 ---
-        self.settings_path = "GXT编辑器设置.json"
+        # --- 持久化设置 (FIXED: 配置文件路径) ---
+        if getattr(sys, 'frozen', False):
+            # 会直接保存在程序相同目录，并且引用！
+            app_dir = Path(sys.executable).parent
+        else:
+            # 如果是.py脚本json会生成在脚本目录下。并且引用！
+            app_dir = Path(__file__).resolve().parent
+        self.settings_path = app_dir / "GXT编辑器设置.json"
+        
         self.remember_gen_extra_choice = None
         self.save_prompt_choice = None # 新增：用于记住“是否保存”的选择
         self._load_settings()
@@ -1323,6 +1515,7 @@ class GXTEditorApp(QMainWindow):
         menubar.addMenu(tools_menu)
         self.font_generator_action = self._act("🎨 GTA 字体贴图生成器", self.open_font_generator)
         tools_menu.addAction(self.font_generator_action)
+        tools_menu.addAction(self._act("🔄 码表转换工具", self.open_codepage_converter))
 
         help_menu = QMenu("帮助", self)
         menubar.addMenu(help_menu)
@@ -1332,7 +1525,7 @@ class GXTEditorApp(QMainWindow):
     def _setup_statusbar(self):
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.update_status("就绪。将 .gxt, .gxt2, whm_table.dat 或 .txt 文件拖入窗口可打开。")
+        self.update_status("就绪。将 .gxt, .gxt2, whm_table.dat 或 .txt 文件/文件夹拖入窗口可打开。")
 
     def _setup_body(self):
         self.tables_dock = QDockWidget("表列表", self)
@@ -1483,22 +1676,37 @@ class GXTEditorApp(QMainWindow):
         if event.mimeData().hasUrls(): event.acceptProposedAction()
 
     def dropEvent(self, event):
-        """处理文件拖放，支持单个或多个文件。"""
+        """处理文件拖放，支持单个或多个文件/文件夹。"""
         urls = event.mimeData().urls()
         if not urls:
             return
-        
+    
         paths = [url.toLocalFile() for url in urls]
-        
-        # 筛选出TXT文件
-        txt_files = [p for p in paths if p.lower().endswith('.txt')]
-        
-        if len(paths) > 1 and txt_files:
-            # 如果拖放了多个文件且其中有TXT文件，则假定用户想要合并/打开所有TXT文件
+    
+        txt_files = []
+        other_files = []
+
+        for path in paths:
+            if os.path.isdir(path):
+                # 如果是目录，则递归查找所有.txt文件
+                for root, _, files in os.walk(path):
+                    for name in files:
+                        if name.lower().endswith('.txt'):
+                            txt_files.append(os.path.join(root, name))
+            else:
+                # 如果是文件
+                if path.lower().endswith('.txt'):
+                    txt_files.append(path)
+                else:
+                    other_files.append(path)
+
+        if txt_files:
+            # 如果找到任何TXT文件（来自文件或文件夹），则优先处理它们
             self.open_txt(files=txt_files)
-        elif paths:
-            # 如果只拖放了一个文件，或多个非TXT文件，则按标准流程打开第一个文件
-            self.open_file(paths[0])
+        elif other_files:
+            # 如果没有找到TXT文件但有其他文件，则按标准流程打开第一个
+            self.open_file(other_files[0])
+
 
     def open_file(self, path):
         if not path or not os.path.exists(path): return
@@ -1513,7 +1721,7 @@ class GXTEditorApp(QMainWindow):
         elif lower_path.endswith(".txt"):
             self.open_txt(files=[path])
         else:
-            self.update_status("错误：请拖拽 .gxt, .gxt2, whm_table.dat 或 .txt 文件。")
+            self.update_status("错误：请拖拽 .gxt, .gxt2, whm_table.dat 或 .txt 文件/文件夹。")
 
     def filter_tables(self):
         keyword = self.table_search.text().lower()
@@ -2705,6 +2913,15 @@ class GXTEditorApp(QMainWindow):
         return data, invalid_keys
 
     # ====== 辅助与工具 ======
+    def open_codepage_converter(self):
+        """打开码表转换工具"""
+        if not self.data:
+            QMessageBox.warning(self, "警告", "请先打开或新建一个文件。")
+            return
+        
+        dialog = CodepageConverterDialog(self)
+        dialog.exec()
+
     def collect_and_filter_chars(self):
         """根据当前版本对应的CHARACTERS.txt逻辑收集和筛选GXT中的特殊字符"""
         if not self.data:
@@ -2804,11 +3021,11 @@ class GXTEditorApp(QMainWindow):
         QMessageBox.information(self, "关于", 
             "倾城剑舞 GXT 编辑器 v2.1\n"
             "支持 V/IV/VC/SA/III 的 GXT/TXT 编辑、导入导出。\n"
-            "新增功能：文件关联、新建GXT、导出单个表、生成png透明汉化字体贴图、支持whm_table.dat编辑")
+            "新增功能：文件关联、新建GXT、导出单个表、生成png透明汉化字体贴图、支持whm_table.dat编辑、码表转换工具")
 
     def show_help(self):
         QMessageBox.information(self, "使用帮助", 
-            "1. 打开文件：菜单或将 .gxt / .gxt2 / whm_table.dat / .txt 拖入窗口，也可通过文件关联gxt文件打开。\n"
+            "1. 打开文件：菜单或将 .gxt / .gxt2 / whm_table.dat / .txt 文件或包含txt的文件夹拖入窗口，也可通过文件关联gxt文件打开。\n"
             "2. 新建文件：文件菜单→新建GXT文件，选择游戏版本。\n"
             "3. 编辑：双击右侧列表中的任意条目，或右键选择“编辑”。\n"
             "4. 多选编辑：选择多行后右键选择“批量编辑”。\n"
@@ -2819,7 +3036,8 @@ class GXTEditorApp(QMainWindow):
             "9. TXT 导入：支持单个或多个TXT导入并直接生成GXT。如果已有GXT打开，则会进行合并。\n"
             "10. GTA IV/V 特别说明：键名可为明文（如 T1_NAME_82）或哈希（0xhash），保存时自动转换哈希。\n"
             "11. WHM Table 支持：可以打开和保存以及编辑 GTA4 民间汉化补丁的 whm_table.dat 文件。\n"
-            "12. 字体生成器：工具菜单→GTA字体贴图生成器，用于创建游戏字体PNG文件。以及支持加载外部字体文件，点击预览图可放大查看。【仅限：汉化字体贴图】")
+            "12. 字体生成器：工具菜单→GTA字体贴图生成器，用于创建游戏字体PNG文件。以及支持加载外部字体文件，点击预览图可放大查看。【仅限：汉化字体贴图】\n"
+            "13. 码表转换工具：用于根据自定义码表文件，对GXT文本内容进行字符的批量替换或还原。")
 
     def set_file_association(self):
         if sys.platform != 'win32':
